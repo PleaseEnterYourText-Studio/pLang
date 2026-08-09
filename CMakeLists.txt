@@ -1,26 +1,41 @@
-cmake_minimum_required(VERSION 3.15)
-project(Mino2 VERSION 0.1.0)
+cmake_minimum_required(VERSION 3.25)
+project(PLang LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_library(lexer_core STATIC
-    src/Lexer.cpp
-)
+if(NOT LLVM_DIR OR NOT EXISTS "${LLVM_DIR}/LLVMConfig.cmake")
+    set(LLVM_DIR "" CACHE PATH "Path to LLVMConfig.cmake" FORCE)
+    foreach(candidate "/usr/local/opt/llvm" "/opt/homebrew/opt/llvm")
+        if(EXISTS "${candidate}/lib/cmake/llvm/LLVMConfig.cmake")
+            set(LLVM_DIR "${candidate}/lib/cmake/llvm")
+            break()
+        endif()
+    endforeach()
+endif()
 
-target_include_directories(lexer_core PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
+find_package(LLVM REQUIRED CONFIG)
 
-add_executable(Mino2
-    src/main.cpp
-)
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
-target_link_libraries(Mino2 PRIVATE
-    lexer_core
-)
+include_directories(${LLVM_INCLUDE_DIRS})
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")
+add_definitions(${LLVM_DEFINITIONS_LIST})
+
+add_executable(PLang
+        src/main.cpp
+        include/main.h)
+
+target_include_directories(PLang PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+target_link_libraries(PLang PRIVATE
+        LLVM-C
+        )
+
+if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(PLang PRIVATE -Wno-unused-parameter -Wno-comment)
+endif()
