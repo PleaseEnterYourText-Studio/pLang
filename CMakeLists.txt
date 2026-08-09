@@ -29,7 +29,9 @@ add_executable(PLang
         src/main.cpp
         include/main.h
         include/Lexer.h
-        src/Lexer.cpp)
+        include/AST.h
+        src/Lexer.cpp
+        src/AST.cpp)
 
 target_include_directories(PLang PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
