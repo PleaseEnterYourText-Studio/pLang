@@ -42,6 +42,9 @@ enum class ASTNodeType
     LOGICAL_OP,
     CONDITIONAL_EXPR,
     CAST,
+    THIS_REF,
+    TYPE_PARAM,
+    TEMPLATE_DECL,
 
     // 类型
     TYPE_PRIMITIVE,
@@ -432,6 +435,85 @@ struct ImplDeclNode : ASTNode
 
     ImplDeclNode(const std::string& target, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::IMPL_DECL, line, column), target(target) {}
+};
+
+// ==================== 以下节点结构来自 main 分支 (81fd524) ====================
+// 作为后续功能实现的设计参考，构造函数已补全内联实现
+
+// ===== do-while 语句 =====
+struct DoWhileStmtNode : ASTNode
+{
+    std::unique_ptr<ASTNode> condition;
+    std::unique_ptr<ASTNode> body;
+
+    DoWhileStmtNode(std::unique_ptr<ASTNode> condition, std::unique_ptr<ASTNode> body, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::WHILE_STMT, line, column), condition(std::move(condition)), body(std::move(body)) {}
+};
+
+// ===== 成员访问 =====
+struct MemberAccessNode : ASTNode
+{
+    std::unique_ptr<ASTNode> object;
+    std::string member;
+    bool isMethodCall;
+
+    MemberAccessNode(std::unique_ptr<ASTNode> object, const std::string& member, bool isMethodCall = false, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::VARIABLE_REF, line, column), object(std::move(object)), member(member), isMethodCall(isMethodCall) {}
+};
+
+// ===== 解引用 =====
+struct DerefNode : ASTNode
+{
+    std::unique_ptr<ASTNode> operand;
+
+    DerefNode(std::unique_ptr<ASTNode> operand, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::UNARY_OP, line, column), operand(std::move(operand)) {}
+};
+
+// ===== 引用类型 =====
+struct ReferenceTypeNode : TypeNode
+{
+    bool isMutable;
+
+    ReferenceTypeNode(std::unique_ptr<TypeNode> inner, bool isMutable, int line = 0, int column = 0)
+        : TypeNode(ASTNodeType::TYPE_REFERENCE, "", line, column, 0, std::move(inner)), isMutable(isMutable) {}
+};
+
+// ===== 模板参数 =====
+struct TemplateParamNode : ASTNode
+{
+    std::string name;
+    bool isTypeParam;
+
+    TemplateParamNode(const std::string& name, bool isTypeParam, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::TYPE_PARAM, line, column), name(name), isTypeParam(isTypeParam) {}
+};
+
+// ===== 模板声明 =====
+struct TemplateDeclNode : ASTNode
+{
+    std::vector<std::unique_ptr<TemplateParamNode>> params;
+    std::unique_ptr<ASTNode> body;
+
+    TemplateDeclNode(std::vector<std::unique_ptr<TemplateParamNode>> params, std::unique_ptr<ASTNode> body, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::TEMPLATE_DECL, line, column), params(std::move(params)), body(std::move(body)) {}
+};
+
+// ===== this 引用 =====
+struct ThisRefNode : ASTNode
+{
+    ThisRefNode(int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::THIS_REF, line, column) {}
+};
+
+// ===== 类型转换 =====
+struct CastExprNode : ASTNode
+{
+    std::unique_ptr<ASTNode> expr;
+    std::unique_ptr<TypeNode> targetType;
+
+    CastExprNode(std::unique_ptr<ASTNode> expr, std::unique_ptr<TypeNode> targetType, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::CAST, line, column), expr(std::move(expr)), targetType(std::move(targetType)) {}
 };
 
 #endif
