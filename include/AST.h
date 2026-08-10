@@ -309,6 +309,15 @@ struct ReturnStmtNode : ASTNode
         : ASTNode(ASTNodeType::RETURN_STMT, line, column), value(std::move(value)) {}
 };
 
+// 表达式语句
+struct ExpressionStmtNode : ASTNode
+{
+    std::unique_ptr<ASTNode> expr;
+
+    ExpressionStmtNode(std::unique_ptr<ASTNode> expr, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::EXPRESSION_STMT, line, column), expr(std::move(expr)) {}
+};
+
 // 块语句
 struct BlockStmtNode : ASTNode
 {

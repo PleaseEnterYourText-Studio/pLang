@@ -59,25 +59,58 @@ void printAST(const ASTNode* node, int depth = 0)
         case ASTNodeType::BINARY_OP:
         {
             auto* b = dynamic_cast<const BinaryOpNode*>(node);
-            std::cout << "Binary(" << static_cast<int>(b->op) << ")";
+            const char* opName = "?";
+            switch (b->op)
+            {
+                case BinaryOpType::ADD: opName = "ADD"; break;
+                case BinaryOpType::SUB: opName = "SUB"; break;
+                case BinaryOpType::MUL: opName = "MUL"; break;
+                case BinaryOpType::DIV: opName = "DIV"; break;
+                case BinaryOpType::MOD: opName = "MOD"; break;
+            }
+            std::cout << "Binary(" << opName << ")";
             break;
         }
         case ASTNodeType::UNARY_OP:
         {
             auto* u = dynamic_cast<const UnaryOpNode*>(node);
-            std::cout << "Unary(" << static_cast<int>(u->op) << ")";
+            const char* opName = "?";
+            switch (u->op)
+            {
+                case UnaryOpType::NEG: opName = "NEG"; break;
+                case UnaryOpType::NOT: opName = "NOT"; break;
+                case UnaryOpType::INC: opName = "INC"; break;
+                case UnaryOpType::DEC: opName = "DEC"; break;
+            }
+            std::cout << "Unary(" << opName << ")";
             break;
         }
         case ASTNodeType::COMPARISON_OP:
         {
             auto* c = dynamic_cast<const ComparisonOpNode*>(node);
-            std::cout << "Cmp(" << static_cast<int>(c->op) << ")";
+            const char* opName = "?";
+            switch (c->op)
+            {
+                case ComparisonOpType::EQ: opName = "EQ"; break;
+                case ComparisonOpType::NE: opName = "NE"; break;
+                case ComparisonOpType::LT: opName = "LT"; break;
+                case ComparisonOpType::LE: opName = "LE"; break;
+                case ComparisonOpType::GT: opName = "GT"; break;
+                case ComparisonOpType::GE: opName = "GE"; break;
+            }
+            std::cout << "Cmp(" << opName << ")";
             break;
         }
         case ASTNodeType::LOGICAL_OP:
         {
             auto* l = dynamic_cast<const LogicalOpNode*>(node);
-            std::cout << "Logical(" << static_cast<int>(l->op) << ")";
+            const char* opName = "?";
+            switch (l->op)
+            {
+                case LogicalOpType::AND: opName = "AND"; break;
+                case LogicalOpType::OR: opName = "OR"; break;
+            }
+            std::cout << "Logical(" << opName << ")";
             break;
         }
         default: std::cout << "Node(" << static_cast<int>(node->type) << ")"; break;
@@ -122,6 +155,20 @@ void printChildren(const ASTNode* node, int depth = 0)
         if (i->thenBranch) printChildren(i->thenBranch.get(), d);
         if (i->elseBranch) printChildren(i->elseBranch.get(), d);
     }
+    else if (node->type == ASTNodeType::WHILE_STMT)
+    {
+        auto* w = dynamic_cast<const WhileStmtNode*>(node);
+        if (w->condition) printChildren(w->condition.get(), d);
+        if (w->body) printChildren(w->body.get(), d);
+    }
+    else if (node->type == ASTNodeType::FOR_STMT)
+    {
+        auto* f = dynamic_cast<const ForStmtNode*>(node);
+        if (f->init) printChildren(f->init.get(), d);
+        if (f->condition) printChildren(f->condition.get(), d);
+        if (f->update) printChildren(f->update.get(), d);
+        if (f->body) printChildren(f->body.get(), d);
+    }
     else if (node->type == ASTNodeType::VARIABLE_DECL)
     {
         auto* v = dynamic_cast<const VariableDeclNode*>(node);
@@ -140,7 +187,8 @@ void printChildren(const ASTNode* node, int depth = 0)
     }
     else if (node->type == ASTNodeType::EXPRESSION_STMT)
     {
-        // 无子节点（简化）
+        auto* e = dynamic_cast<const ExpressionStmtNode*>(node);
+        if (e->expr) printChildren(e->expr.get(), d);
     }
     else if (node->type == ASTNodeType::FUNCTION_CALL)
     {
@@ -172,7 +220,7 @@ void printChildren(const ASTNode* node, int depth = 0)
     }
     else
     {
-        printAST(node, depth);
+        // leaf node, already printed
     }
 }
 
@@ -197,7 +245,7 @@ int main() {
     auto tokens = lexer.scanTokens();
     for (const auto& tok : tokens) {
         if (tok.type == TokenType::ERROR) {
-            std::cout << "[LEXER ERROR] " << tok.toString() << "\n";
+            std::cerr << "lexical error: " << tok.toString() << "\n";
             return 1;
         }
     }
@@ -208,9 +256,9 @@ int main() {
         printAST(program.get());
         printChildren(program.get());
     } catch (const std::exception& e) {
-        std::cout << "解析失败: " << e.what() << "\n";
+        std::cerr << "parse error: " << e.what() << "\n";
         return 1;
     }
-    std::cout << "解析成功\n";
+    std::cout << "parsing passed\n";
     return 0;
 }

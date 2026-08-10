@@ -512,12 +512,14 @@ std::unique_ptr<ASTNode> Parser::parseReturn()
 std::unique_ptr<ASTNode> Parser::parseExprStmt()
 {
     auto expr = parseExpression();
+    int line = expr->line;
+    int column = expr->column;
     expect(TokenType::SEMICOLON, "expected ;");
     if (expr->type == ASTNodeType::ASSIGNMENT_STMT)
     {
         return expr;
     }
-    return std::make_unique<ASTNode>(ASTNodeType::EXPRESSION_STMT, expr->line, expr->column);
+    return std::make_unique<ExpressionStmtNode>(std::move(expr), line, column);
 }
 
 std::unique_ptr<ASTNode> Parser::parseExpression()
@@ -541,7 +543,31 @@ std::unique_ptr<ASTNode> Parser::parseAssignment()
         if (match(op))
         {
             auto value = parseAssignment();
-            return std::make_unique<AssignmentNode>(std::move(left), std::move(value), op,
+            if (op == TokenType::ASSIGN)
+            {
+                return std::make_unique<AssignmentNode>(std::move(left), std::move(value), op,
+                                                        left->line, left->column);
+            }
+
+            // 复合赋值 a += b 展开为 a = a + b
+            BinaryOpType binOp;
+            switch (op)
+            {
+                case TokenType::PLUS_ASSIGN: binOp = BinaryOpType::ADD; break;
+                case TokenType::MINUS_ASSIGN: binOp = BinaryOpType::SUB; break;
+                case TokenType::STAR_ASSIGN: binOp = BinaryOpType::MUL; break;
+                case TokenType::SLASH_ASSIGN: binOp = BinaryOpType::DIV; break;
+                case TokenType::PERCENT_ASSIGN: binOp = BinaryOpType::MOD; break;
+                default: binOp = BinaryOpType::ADD; break;
+            }
+
+            auto targetCopy = left->type == ASTNodeType::VARIABLE_REF
+                ? std::make_unique<VariableRefNode>(dynamic_cast<VariableRefNode*>(left.get())->name,
+                                                    left->line, left->column)
+                : nullptr;
+
+            auto binExpr = std::make_unique<BinaryOpNode>(binOp, std::move(targetCopy), std::move(value));
+            return std::make_unique<AssignmentNode>(std::move(left), std::move(binExpr), TokenType::ASSIGN,
                                                     left->line, left->column);
         }
     }
@@ -786,7 +812,7 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
             }
             else
             {
-                throw std::runtime_error("无法调用该表达式");
+                throw std::runtime_error("cannot call this expression");
             }
         }
         else if (match(TokenType::INC))
