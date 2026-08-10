@@ -261,5 +261,5 @@ using Circle = struct : pub Shape {
 ## 标准库类型
 - `std.vector.vec`: 可变长数组, 有运行环境下可使用堆内存, 否则abort.
 - `std.string.str`: 可变ASCII字符串, 有运行环境下可使用堆内存, 否则强制使用栈.
-- `std.string.wdtr`: 可变UTF-32字符串，有运行环境下可时候堆内存, 否则强制使用栈.
+- `std.string.wstr`: 可变UTF-32字符串，有运行环境下可时候堆内存, 否则强制使用栈.
 
