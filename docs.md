@@ -11,7 +11,7 @@ package foo;
 使用 `import` 引入其他包的符号:
 ```plang
 import std.vector;
-using vec = std.vector<i32>;
+using vec = vector.vec<i32>;
 ```
 `import` 用于引入, `using` 用于类型别名, 二者职责不同.
 顶层符号(函数/结构体/类型)默认仅包内可见, 显式 `pub` 修饰后对外公开.
@@ -68,10 +68,10 @@ var: int a = int as b;
 var: T a;
 var -> var: T p = &a;
 ```
-数组可通过`&`转换为指向其首元素的指针:
+数组可转换为指向其首元素的指针:
 ```plang
 var: T[1] a;
-var -> var: T p = &a;
+var -> var: T p = a;
 ```
 
 ## 平凡类型
@@ -106,14 +106,14 @@ var -> var: T p = &a;
 ```plang
 var: T[1] a;
 ```
-长度不可变, 可通过类型转换为指针, 见下文`类型转换`中的取地址操作符.
+长度不可变, 可通过类型转换为指针, 见`类型转换`.
 
 ### 指针
 指针是指向一个变量的类型:
 ```plang
 var: T a;
 var -> var: T p1;
-var -> var: p2; // 可省略其真实类型
+var -> var p2; // 可省略其真实类型
 ```
 显示书写`var`/`val`可避免修改误底层数据. 
 如果书写指向`var`却实际指向`val`触发编译错误, 除非强制类型转换.
@@ -122,7 +122,7 @@ val: T a{0};
 var -> val p;
 var -> var p; // 编译报错
 ```
-对于指针的接引用, 可使用`*p`:
+对于指针的解引用, 可使用`*p`:
 ```plang
 var: T a;
 var -> var p;
@@ -164,7 +164,7 @@ impl t.converter {
 ```
 结构体同理, 可用:
 ```plang
-using t = struct{};
+using t = struct;
 impl t {
 };
 ```
