@@ -84,8 +84,11 @@ add_executable(PLang
     include/main.h
     include/Lexer.h
     include/AST.h
+    include/Parser.h
+    include/token.h
     src/Lexer.cpp
     src/AST.cpp
+    src/Parser.cpp
 )
 
 target_include_directories(PLang PRIVATE
