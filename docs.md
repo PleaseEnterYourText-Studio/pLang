@@ -153,7 +153,7 @@ system.io.output("hello");
 ## 变量修饰
 - `var`: 表示变量, 其数据可变.
 - `val`: 表示常量, 其数据不可变且必须当地构造.
-- `move`: 表示`将亡值`, 例如`函数返回`/`显示移动`.
+- `moved`: 表示`将亡值`, 例如`函数返回`/`显示移动`.
 
 在声明变量时, **不可省略**其类型修饰.
 例如, 声明一个类型为长整形的变量:
@@ -174,13 +174,12 @@ var: i64 a;
 var: int myValue = 1;
 val: string userName = "plang";
 ```
-- `var`/`val`变量: 小驼峰, 如`myValue`, `userCount`.
-- `val`常量: 小驼峰, 如`maxSize`, `piValue`.
+
 
 #### 保留字
 以下单词被语言保留, 不可用作标识符(变量名/函数名/类型名等):
 - `package` `import`: 包声明与引用.
-- `var` `val` `move`: 变量修饰.
+- `var` `val` `moved`: 变量修饰.
 - `func` `impl` `return`: 函数定义/实现/返回.
 - `using` `struct` `abstract`: 类型定义.
 - `pub` `prt` `pri`: 访问权限.
@@ -374,8 +373,8 @@ using t = struct {
     pub func .destroy() {} // 析构函数
     pub func .construction(val: thisType d) {} // 拷贝构造函数
     pub func .copy(val: thisType d) {} // 拷贝赋值函数
-    pub func .construction(move: thisType d) {} // 移动构造函数
-    pub func .copy(move: thisType d) {} // 移动赋值函数
+    pub func .construction(moved: thisType d) {} // 移动构造函数
+    pub func .copy(moved: thisType d) {} // 移动赋值函数
 };
 ```
 其中`thisType`为`pri`, 用于表示这个类型, 也可使用上面的t.
@@ -393,9 +392,10 @@ using S = struct : pub A, B { }; // A 公开继承, B 私有继承
 重名成员必须限定, 若多个父类存在同名成员/方法, 必须使用`s.A.foo()`/`s.B.foo()`显式指定, 否则编译错误.
 允许向上转型, 可将子类对象/指针转换为公开继承的父类类型, 偏移由编译器在编译期计算.
 
-### 动态分派
-不提供虚函数, 无vtable, 所有调用在编译期静态解析.
-提供接口(`abstract`), 父类只声明函数而无实现, 子类必须实现, 并允许"子类当作父类使用", 运行时通过函数指针表分派:
+### 多态与分派
+分派分为静态分派与动态分派.
+普通方法调用走静态分派, 编译期直接确定目标, 无vtable, 性能与直接调用一致.
+接口(`abstract`)走动态分派, 父类只声明函数而无实现, 子类必须实现, 运行时通过函数指针表分派:
 ```plang
 using Shape = abstract {
     pub func area() -> f64; // 仅声明, 无实现
