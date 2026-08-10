@@ -29,8 +29,8 @@ std::string getLine(const std::string& source, int line)
 void printError(const std::string& filename, const std::string& source,
                 int line, int column, const std::string& message)
 {
-    std::cerr << filename << ":" << line << ":" << column
-              << ": error: " << message << "\n";
+    std::cerr << filename << ":" << line << ":" << column << ":\n";
+    std::cerr << "  error: " << message << "\n";
     std::string lineText = getLine(source, line);
     if (!lineText.empty())
     {
@@ -44,8 +44,8 @@ void printError(const std::string& filename, const std::string& source,
 void printWarning(const std::string& filename, const std::string& source,
                   int line, int column, const std::string& message)
 {
-    std::cerr << filename << ":" << line << ":" << column
-              << ": warning: " << message << "\n";
+    std::cerr << filename << ":" << line << ":" << column << ":\n";
+    std::cerr << "  warning: " << message << "\n";
     std::string lineText = getLine(source, line);
     if (!lineText.empty())
     {

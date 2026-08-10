@@ -16,7 +16,7 @@ using Shape = abstract {
 };
 using Circle = struct : pub Shape {
     pub val: f64 r;
-    pub val: f128 r;
+    pub val: f64 r;
     pub func area() -> f64 {
         return 3.14 * this.r * this.r;
     }
