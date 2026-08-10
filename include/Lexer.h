@@ -40,6 +40,8 @@ private:
 
     void scanString();
 
+    void scanChar();
+
     void scanSymbol();
 
     void handleLineComment();
@@ -47,6 +49,8 @@ private:
     void handleBlockComment();
 
     void addToken(TokenType type, const std::string& text);
+
+    void initKeywords();
 };
 
 #endif

@@ -10,23 +10,43 @@
 
 enum class TokenType 
 {
-    //文件标识符及字面量
-    IDENT, NUMBER, STRING,
+    //字面量
+    IDENT, NUMBER, STRING, CHAR_LIT,
 
     //关键字
-    IF, ELSE, WHILE, FOR, RETURM, INT, VOID, CHAR,
+    PACKAGE, IMPORT,
+    VAR, VAL, MOVE,
+    FUNC, IMPL, RETURN,
+    USING, STRUCT, ABSTRACT,
+    PUB, PRT, PRI,
+    THIS, THIS_TYPE, TYPE,
+    AS,
+    IF, ELSE, WHILE, FOR, DO,
+
+    //内置类型名
+    INT, CHAR, STRING_TYPE, WCHAR, WSTRING,
+    I32, I16, I64, I8,
+    U32, UINT, U16, U64, U8,
+    F32, F64,
 
     //运算符
-    ASSIGN ,  // =
-    PLUS, MINUS, // + -
-    STAR, SLASH, // * /
-    EQ, NE, // == !=
-    LT, LE, GT, GE, // < <= > >=
-
-    //分隔符
-    LPAREN, RPAREN, // ( )
+    ASSIGN,          // =
+    PLUS, MINUS,     // + -
+    STAR, SLASH, PERCENT,   // * / %
+    EQ, NE,          // == !=
+    LT, LE, GT, GE,  // < <= > >=
+    AND, OR, NOT,    // && || !
+    AMP, PIPE, CARET, TILDE, SHL, SHR,  // & | ^ ~ << >>
+    PLUS_ASSIGN, MINUS_ASSIGN, STAR_ASSIGN, SLASH_ASSIGN, PERCENT_ASSIGN, // += -= *= /= %=
+    SHL_ASSIGN, SHR_ASSIGN, AMP_ASSIGN, PIPE_ASSIGN, CARET_ASSIGN,        // <<= >>= &= |= ^=
+    INC, DEC,        // ++ --
+    ARROW,           // ->
+    AT,              // @
+    COLON, COMMA, DOT,  // : , .
+    LPAREN, RPAREN,  // ( )
     LBRACE, RBRACE,  // { }
-    SEMICOLON,  // ;
+    LBRACKET, RBRACKET, // [ ]
+    SEMICOLON,       // ;
 
     ERROR, EOF_TOKEN
 };
@@ -44,39 +64,41 @@ public:
 
     std::string toString() const 
     {
-        static std::unordered_map<TokenType, std::string> names = 
+        static const std::unordered_map<TokenType, std::string> names = 
         {
-            {TokenType::ASSIGN, "ASSIGN"},
-            {TokenType::CHAR, "CHAR"},
-            {TokenType::ELSE, "ELSE"},
-            {TokenType::EOF_TOKEN, "EOF_TOKEN"},
-            {TokenType::EQ, "EQ"},
-            {TokenType::ERROR, "ERROR"},
-            {TokenType::FOR, "FOR"},
-            {TokenType::GE, "GE"},
-            {TokenType::GT, "GT"},
-            {TokenType::IDENT, "IDENT"},
-            {TokenType::IF, "IF"},
-            {TokenType::INT, "INT"},
-            {TokenType::LBRACE, "LBRACE"},
-            {TokenType::LE, "LE"},
-            {TokenType::LPAREN, "LPAREN"},
-            {TokenType::LT, "LT"},
-            {TokenType::MINUS, "MINUS"},
-            {TokenType::NE, "NE"},
-            {TokenType::NUMBER, "NUMBER"},
-            {TokenType::PLUS, "PLUS"},
-            {TokenType::RBRACE, "RBRACE"},
-            {TokenType::RETURM, "RETURM"},
-            {TokenType::RPAREN, "RPAREM"}
+            {TokenType::IDENT, "IDENT"}, {TokenType::NUMBER, "NUMBER"}, {TokenType::STRING, "STRING"}, {TokenType::CHAR_LIT, "CHAR_LIT"},
+            {TokenType::PACKAGE, "PACKAGE"}, {TokenType::IMPORT, "IMPORT"},
+            {TokenType::VAR, "VAR"}, {TokenType::VAL, "VAL"}, {TokenType::MOVE, "MOVE"},
+            {TokenType::FUNC, "FUNC"}, {TokenType::IMPL, "IMPL"}, {TokenType::RETURN, "RETURN"},
+            {TokenType::USING, "USING"}, {TokenType::STRUCT, "STRUCT"}, {TokenType::ABSTRACT, "ABSTRACT"},
+            {TokenType::PUB, "PUB"}, {TokenType::PRT, "PRT"}, {TokenType::PRI, "PRI"},
+            {TokenType::THIS, "THIS"}, {TokenType::THIS_TYPE, "THIS_TYPE"}, {TokenType::TYPE, "TYPE"},
+            {TokenType::AS, "AS"},
+            {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"},
+            {TokenType::INT, "INT"}, {TokenType::CHAR, "CHAR"}, {TokenType::STRING_TYPE, "STRING_TYPE"}, {TokenType::WCHAR, "WCHAR"}, {TokenType::WSTRING, "WSTRING"},
+            {TokenType::I32, "I32"}, {TokenType::I16, "I16"}, {TokenType::I64, "I64"}, {TokenType::I8, "I8"},
+            {TokenType::U32, "U32"}, {TokenType::UINT, "UINT"}, {TokenType::U16, "U16"}, {TokenType::U64, "U64"}, {TokenType::U8, "U8"},
+            {TokenType::F32, "F32"}, {TokenType::F64, "F64"},
+            {TokenType::ASSIGN, "ASSIGN"}, {TokenType::PLUS, "PLUS"}, {TokenType::MINUS, "MINUS"},
+            {TokenType::STAR, "STAR"}, {TokenType::SLASH, "SLASH"}, {TokenType::PERCENT, "PERCENT"},
+            {TokenType::EQ, "EQ"}, {TokenType::NE, "NE"},
+            {TokenType::LT, "LT"}, {TokenType::LE, "LE"}, {TokenType::GT, "GT"}, {TokenType::GE, "GE"},
+            {TokenType::AND, "AND"}, {TokenType::OR, "OR"}, {TokenType::NOT, "NOT"},
+            {TokenType::AMP, "AMP"}, {TokenType::PIPE, "PIPE"}, {TokenType::CARET, "CARET"}, {TokenType::TILDE, "TILDE"}, {TokenType::SHL, "SHL"}, {TokenType::SHR, "SHR"},
+            {TokenType::PLUS_ASSIGN, "PLUS_ASSIGN"}, {TokenType::MINUS_ASSIGN, "MINUS_ASSIGN"}, {TokenType::STAR_ASSIGN, "STAR_ASSIGN"}, {TokenType::SLASH_ASSIGN, "SLASH_ASSIGN"}, {TokenType::PERCENT_ASSIGN, "PERCENT_ASSIGN"},
+            {TokenType::SHL_ASSIGN, "SHL_ASSIGN"}, {TokenType::SHR_ASSIGN, "SHR_ASSIGN"}, {TokenType::AMP_ASSIGN, "AMP_ASSIGN"}, {TokenType::PIPE_ASSIGN, "PIPE_ASSIGN"}, {TokenType::CARET_ASSIGN, "CARET_ASSIGN"},
+            {TokenType::INC, "INC"}, {TokenType::DEC, "DEC"}, {TokenType::ARROW, "ARROW"}, {TokenType::AT, "AT"},
+            {TokenType::COLON, "COLON"}, {TokenType::COMMA, "COMMA"}, {TokenType::DOT, "DOT"},
+            {TokenType::LPAREN, "LPAREN"}, {TokenType::RPAREN, "RPAREN"},
+            {TokenType::LBRACE, "LBRACE"}, {TokenType::RBRACE, "RBRACE"},
+            {TokenType::LBRACKET, "LBRACKET"}, {TokenType::RBRACKET, "RBRACKET"},
+            {TokenType::SEMICOLON, "SEMICOLON"}, {TokenType::ERROR, "ERROR"}, {TokenType::EOF_TOKEN, "EOF_TOKEN"}
         };
         auto it = names.find(type);
         std::string typeName = (it != names.end() ) ? it->second : "UNKNOWN";
         return "Token(" + typeName + ", '" + text + "', " + 
                std::to_string(line) + ":" + std::to_string(column) + ")";
     };
-
-
 };
 
 #endif
