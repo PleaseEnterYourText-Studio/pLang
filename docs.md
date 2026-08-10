@@ -259,7 +259,7 @@ using Circle = struct : pub Shape {
 覆盖父类成员时, `prt`(子类可写)语义在继承下依旧成立.
 
 ## 标准库类型
-- `std.vector`: 可变长数组, 有运行环境下可使用堆内存, 否则abort.
-- `std.string`: 可变ASCII字符串, 有运行环境下可使用堆内存, 否则强制使用栈.
-- `std.wstring`: 可变UTF-32字符串，有运行环境下可时候堆内存, 否则强制使用栈.
+- `std.vector.vec`: 可变长数组, 有运行环境下可使用堆内存, 否则abort.
+- `std.string.str`: 可变ASCII字符串, 有运行环境下可使用堆内存, 否则强制使用栈.
+- `std.string.wdtr`: 可变UTF-32字符串，有运行环境下可时候堆内存, 否则强制使用栈.
 
