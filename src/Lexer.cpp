@@ -43,6 +43,9 @@ void Lexer::initKeywords()
         {"string", TokenType::STRING_TYPE},
         {"wchar", TokenType::WCHAR},
         {"wstring", TokenType::WSTRING},
+        {"bool", TokenType::BOOL},
+        {"true", TokenType::TRUE},
+        {"false", TokenType::FALSE},
         {"i32", TokenType::I32},
         {"i16", TokenType::I16},
         {"i64", TokenType::I64},
@@ -268,6 +271,7 @@ void Lexer::scanChar()
 {
     advance();
     column++;
+    size_t start = pos;
     int col = column;
 
     if (peek() == '\\')
@@ -301,7 +305,7 @@ void Lexer::scanChar()
     advance();
     column++;
 
-    std::string text = source.substr(col - 2, (column - 1) - (col - 2));
+    std::string text = source.substr(start, pos - start - 1);
     tokens.emplace_back(TokenType::CHAR_LIT, text, line, col);
 }
 

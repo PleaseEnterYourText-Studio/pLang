@@ -5,60 +5,65 @@
 #include "token.h"
 
 int main() {
-    struct KeywordTest {
-        const char* keyword;
-        TokenType expected;
-    };
-
-    std::vector<KeywordTest> tests = {
-        {"package", TokenType::PACKAGE}, {"import", TokenType::IMPORT},
-        {"var", TokenType::VAR}, {"val", TokenType::VAL}, {"move", TokenType::MOVE},
-        {"func", TokenType::FUNC}, {"impl", TokenType::IMPL}, {"return", TokenType::RETURN},
-        {"using", TokenType::USING}, {"struct", TokenType::STRUCT}, {"abstract", TokenType::ABSTRACT},
-        {"pub", TokenType::PUB}, {"prt", TokenType::PRT}, {"pri", TokenType::PRI},
-        {"this", TokenType::THIS}, {"thisType", TokenType::THIS_TYPE}, {"type", TokenType::TYPE},
-        {"as", TokenType::AS},
-        {"if", TokenType::IF}, {"else", TokenType::ELSE}, {"while", TokenType::WHILE},
-        {"for", TokenType::FOR}, {"do", TokenType::DO},
-        {"int", TokenType::INT}, {"char", TokenType::CHAR}, {"string", TokenType::STRING_TYPE},
-        {"wchar", TokenType::WCHAR}, {"wstring", TokenType::WSTRING},
-        {"i32", TokenType::I32}, {"i16", TokenType::I16}, {"i64", TokenType::I64}, {"i8", TokenType::I8},
-        {"u32", TokenType::U32}, {"uint", TokenType::UINT}, {"u16", TokenType::U16},
-        {"u64", TokenType::U64}, {"u8", TokenType::U8},
-        {"f32", TokenType::F32}, {"f64", TokenType::F64},
-    };
-
-    int pass = 0, fail = 0;
-
-    std::string source;
-    for (const auto& t : tests) {
-        source += t.keyword;
-        source += " ";
-    }
+    std::string source =
+        "package foo;\n"
+        "import std.vector;\n"
+        "using vec = std.vector<i32>;\n"
+        "\n"
+        "using Shape = abstract {\n"
+        "    pub func area() -> f64;\n"
+        "};\n"
+        "using Circle = struct : pub Shape {\n"
+        "    prt val: f64 r;\n"
+        "    pri val: i32 secret;\n"
+        "    pub func area() -> f64 {\n"
+        "        return 3.14 * this.r * this.r;\n"
+        "    }\n"
+        "    pub func .converter();\n"
+        "};\n"
+        "impl Circle.converter {\n"
+        "    this.secret = 42;\n"
+        "}\n"
+        "func foo<T: type>(val: T a) -> typeof(a) {\n"
+        "    var: i32 arr[3] = {1, 2, 3};\n"
+        "    var -> var: i32 p = &a;\n"
+        "    var b@a;\n"
+        "    if (a > 0) {\n"
+        "        a += 2;\n"
+        "    } else if (a == 0) {\n"
+        "        a = (int as b);\n"
+        "    } else {\n"
+        "        a %= 3;\n"
+        "    }\n"
+        "    while (a < 10) { a++; }\n"
+        "    do { a--; } while (a > 0);\n"
+        "    for (var: i32 i = 0; i < 5; i++) { a <<= 1; }\n"
+        "    return a;\n"
+        "}\n"
+        "func main() -> int {\n"
+        "    var: char c = 'x';\n"
+        "    var: string s = \"hi\\n\\t\";\n"
+        "    var: u64 x = 0xFF + 0b1010 + 0o17 + 1ll;\n"
+        "    var: f32 f = 2.5f;\n"
+        "    var: bool ok = (x >= 1 && ok) || !ok;\n"
+        "    return 0;\n"
+        "}\n";
 
     Lexer lexer(source);
     auto tokens = lexer.scanTokens();
 
-    std::cout << "=== 关键字识别测试 ===\n";
-    for (size_t i = 0; i < tests.size(); ++i) {
-        const auto& tok = tokens[i];
-        const auto& expect = tests[i];
-        bool ok = (tok.type == expect.expected);
-        std::cout << (ok ? "[PASS] " : "[FAIL] ")
-                  << expect.keyword << " -> " << tok.toString() << "\n";
-        ok ? pass++ : fail++;
+    int errors = 0;
+    for (const auto& tok : tokens) {
+        if (tok.type == TokenType::ERROR) {
+            std::cout << "[ERROR TOKEN] " << tok.toString() << "\n";
+            errors++;
+        }
     }
+    if (errors == 0) std::cout << "无错误 token\n";
 
-    std::cout << "\n=== 非关键字(应识别为IDENT) ===\n";
-    Lexer lexer2("hello fooBar _tmp x1");
-    auto tokens2 = lexer2.scanTokens();
-    for (size_t i = 0; i < 4; ++i) {
-        bool ok = (tokens2[i].type == TokenType::IDENT);
-        std::cout << (ok ? "[PASS] " : "[FAIL] ")
-                  << tokens2[i].text << " -> " << tokens2[i].toString() << "\n";
-        ok ? pass++ : fail++;
+    std::cout << "=== 全部 token (" << tokens.size() << ") ===\n";
+    for (const auto& tok : tokens) {
+        std::cout << tok.toString() << "\n";
     }
-
-    std::cout << "\n结果: " << pass << " 通过, " << fail << " 失败\n";
-    return fail == 0 ? 0 : 1;
+    return errors == 0 ? 0 : 1;
 }

@@ -24,10 +24,11 @@ enum class TokenType
     IF, ELSE, WHILE, FOR, DO,
 
     //内置类型名
-    INT, CHAR, STRING_TYPE, WCHAR, WSTRING,
+    INT, CHAR, STRING_TYPE, WCHAR, WSTRING, BOOL,
     I32, I16, I64, I8,
     U32, UINT, U16, U64, U8,
     F32, F64,
+    TRUE, FALSE,
 
     //运算符
     ASSIGN,          // =
@@ -75,7 +76,8 @@ public:
             {TokenType::THIS, "THIS"}, {TokenType::THIS_TYPE, "THIS_TYPE"}, {TokenType::TYPE, "TYPE"},
             {TokenType::AS, "AS"},
             {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"},
-            {TokenType::INT, "INT"}, {TokenType::CHAR, "CHAR"}, {TokenType::STRING_TYPE, "STRING_TYPE"}, {TokenType::WCHAR, "WCHAR"}, {TokenType::WSTRING, "WSTRING"},
+            {TokenType::INT, "INT"}, {TokenType::CHAR, "CHAR"}, {TokenType::STRING_TYPE, "STRING_TYPE"}, {TokenType::WCHAR, "WCHAR"}, {TokenType::WSTRING, "WSTRING"}, {TokenType::BOOL, "BOOL"},
+            {TokenType::TRUE, "TRUE"}, {TokenType::FALSE, "FALSE"},
             {TokenType::I32, "I32"}, {TokenType::I16, "I16"}, {TokenType::I64, "I64"}, {TokenType::I8, "I8"},
             {TokenType::U32, "U32"}, {TokenType::UINT, "UINT"}, {TokenType::U16, "U16"}, {TokenType::U64, "U64"}, {TokenType::U8, "U8"},
             {TokenType::F32, "F32"}, {TokenType::F64, "F64"},
