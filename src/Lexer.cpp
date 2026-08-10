@@ -19,7 +19,7 @@ void Lexer::initKeywords()
         {"import", TokenType::IMPORT},
         {"var", TokenType::VAR},
         {"val", TokenType::VAL},
-        {"move", TokenType::MOVE},
+        {"moved", TokenType::MOVE},
         {"func", TokenType::FUNC},
         {"impl", TokenType::IMPL},
         {"return", TokenType::RETURN},

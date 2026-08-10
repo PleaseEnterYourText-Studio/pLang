@@ -41,6 +41,7 @@ enum class ASTNodeType
     COMPARISON_OP,
     LOGICAL_OP,
     CONDITIONAL_EXPR,
+    CAST,
 
     // 类型
     TYPE_PRIMITIVE,
@@ -82,7 +83,8 @@ enum class UnaryOpType
     NEG, // -a
     NOT, // !a
     INC, // ++a
-    DEC // --a
+    DEC, // --a
+    DEREF // *a
 };
 
 enum class ComparisonOpType
@@ -116,27 +118,30 @@ struct ASTNode
 struct LiteralIntNode : ASTNode 
 {
     long long value;
+    std::string suffix;     // ""=int, "ll"=i64
 
-    LiteralIntNode(long long value, int line = 0, int column = 0)
-    : ASTNode(ASTNodeType::LITERAL_INT, line, column), value(value) {};
+    LiteralIntNode(long long value, int line = 0, int column = 0, const std::string& suffix = "")
+    : ASTNode(ASTNodeType::LITERAL_INT, line, column), value(value), suffix(suffix) {};
 };
 
 // 浮点数节点
 struct LiteralFloatNode : ASTNode 
 {
     double value;
+    std::string suffix;     // ""=f64, "f"=f32
 
-    LiteralFloatNode(double value, int line = 0, int column = 0)
-    : ASTNode(ASTNodeType::LITERAL_FLOAT, line, column), value(value) {};
+    LiteralFloatNode(double value, int line = 0, int column = 0, const std::string& suffix = "")
+    : ASTNode(ASTNodeType::LITERAL_FLOAT, line, column), value(value), suffix(suffix) {};
 };
 
 //字符串节点
 struct LiteralStringNode : ASTNode 
 {
     std::string value;
+    bool isChar;
 
-    LiteralStringNode(const std::string& value, int line = 0, int column = 0) 
-    : ASTNode(ASTNodeType::LITERAL_STRING, line, column), value(value) {};
+    LiteralStringNode(const std::string& value, int line = 0, int column = 0, bool isChar = false) 
+    : ASTNode(ASTNodeType::LITERAL_STRING, line, column), value(value), isChar(isChar) {};
 };
 
 //布尔节点
@@ -176,6 +181,25 @@ struct UnaryOpNode : ASTNode
 
     UnaryOpNode(UnaryOpType op, std::unique_ptr<ASTNode> operand, int line = 0, int column = 0)
     : ASTNode(ASTNodeType::UNARY_OP, line, column), op(op), operand(std::move(operand)) {};
+};
+
+// 取地址节点
+struct AddressOfNode : ASTNode
+{
+    std::unique_ptr<ASTNode> operand;
+
+    explicit AddressOfNode(std::unique_ptr<ASTNode> operand, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::UNARY_OP, line, column), operand(std::move(operand)) {}
+};
+
+// 类型转换节点
+struct CastNode : ASTNode
+{
+    std::string targetType;
+    std::unique_ptr<ASTNode> value;
+
+    CastNode(const std::string& targetType, std::unique_ptr<ASTNode> value, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::CAST, line, column), targetType(targetType), value(std::move(value)) {}
 };
 
 //比较运算节点

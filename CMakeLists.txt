@@ -81,14 +81,19 @@ add_definitions(${LLVM_DEFINITIONS})
 
 add_executable(PLang
     src/main.cpp
+    src/main.plang
     include/main.h
     include/Lexer.h
     include/AST.h
     include/Parser.h
+    include/Sema.h
+    include/SymbolTable.h
     include/token.h
     src/Lexer.cpp
     src/AST.cpp
     src/Parser.cpp
+    src/Sema.cpp
+    src/SymbolTable.cpp
 )
 
 target_include_directories(PLang PRIVATE
@@ -106,6 +111,19 @@ llvm_map_components_to_libnames(llvm_libs
 )
 
 target_link_libraries(PLang PRIVATE ${llvm_libs})
+
+# 监控 .plang 源码：修改后自动验证语法
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/main.plang.stamp
+    COMMAND $<TARGET_FILE:PLang> ${CMAKE_CURRENT_SOURCE_DIR}/src/main.plang
+    COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/main.plang.stamp
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/main.plang
+    COMMENT "Validating src/main.plang"
+    VERBATIM
+)
+add_custom_target(validate_plang ALL
+    DEPENDS PLang ${CMAKE_CURRENT_BINARY_DIR}/main.plang.stamp
+)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(PLang PRIVATE -Wno-unused-parameter -Wno-comment)

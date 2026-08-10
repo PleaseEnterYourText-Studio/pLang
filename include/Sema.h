@@ -1,0 +1,89 @@
+#ifndef SEMA_H
+#define SEMA_H
+
+#include <string>
+#include <vector>
+#include <memory>
+#include "AST.h"
+#include "SymbolTable.h"
+
+// 语义分析错误
+struct SemaError
+{
+    int line;
+    int column;
+    std::string message;
+
+    SemaError(int line, int column, std::string message)
+        : line(line), column(column), message(std::move(message)) {}
+};
+
+// 语义分析警告
+struct SemaWarning
+{
+    int line;
+    int column;
+    std::string message;
+
+    SemaWarning(int line, int column, std::string message)
+        : line(line), column(column), message(std::move(message)) {}
+};
+
+class Sema
+{
+private:
+    SymbolTable symbols;
+    std::vector<SemaError> errors;
+    std::vector<SemaWarning> warnings;
+    std::string currentReturnType;      // 当前函数返回类型（空=无返回）
+    std::string currentFunctionName;    // 当前函数名
+
+public:
+    bool analyze(std::unique_ptr<ProgramNode>& program);
+    const std::vector<SemaError>& getErrors() const { return errors; }
+    const std::vector<SemaWarning>& getWarnings() const { return warnings; }
+
+private:
+    void error(int line, int column, const std::string& message);
+    void warn(int line, int column, const std::string& message);
+
+    // 声明检查
+    void visitProgram(ProgramNode* node);
+    void visitDecl(ASTNode* node);
+    void visitFunctionDecl(FunctionDeclNode* node);
+    void visitStructDecl(StructDeclNode* node);
+    void visitImplDecl(ImplDeclNode* node);
+
+    // 语句检查
+    void visitStmt(ASTNode* node);
+    void visitBlock(BlockStmtNode* node);
+    void visitVarDecl(VariableDeclNode* node);
+    void visitIf(IfStmtNode* node);
+    void visitWhile(WhileStmtNode* node);
+    void visitFor(ForStmtNode* node);
+    void visitReturn(ReturnStmtNode* node);
+    void visitExprStmt(ExpressionStmtNode* node);
+
+    // 表达式检查（返回推断出的类型名，空串表示无/void）
+    std::string visitExpr(ASTNode* node);
+    std::string visitBinary(BinaryOpNode* node);
+    std::string visitUnary(UnaryOpNode* node);
+    std::string visitComparison(ComparisonOpNode* node);
+    std::string visitLogical(LogicalOpNode* node);
+    std::string visitCall(FunctionCallNode* node);
+    std::string visitLiteralInt(LiteralIntNode* node);
+    std::string visitLiteralFloat(LiteralFloatNode* node);
+    std::string visitLiteralString(LiteralStringNode* node);
+    std::string visitLiteralBool(LiteralBoolNode* node);
+    std::string visitVariableRef(VariableRefNode* node);
+    std::string visitAssignment(AssignmentNode* node);
+
+    // 类型工具
+    std::string typeNodeToName(TypeNode* type);
+    bool isBuiltinType(const std::string& type) const;
+    bool isNumericType(const std::string& type) const;
+    bool isCompatible(const std::string& from, const std::string& to) const;
+    bool isWidening(const std::string& from, const std::string& to) const;
+};
+
+#endif

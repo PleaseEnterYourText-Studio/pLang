@@ -1,264 +1,124 @@
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <memory>
 #include "Lexer.h"
 #include "Parser.h"
+#include "Sema.h"
 #include "AST.h"
 #include "token.h"
 
-void printAST(const ASTNode* node, int depth = 0)
+// 从源码中提取第 line 行的内容
+std::string getLine(const std::string& source, int line)
 {
-    if (!node) return;
-    std::string indent(depth * 2, ' ');
-    std::cout << indent;
-
-    switch (node->type)
+    std::istringstream stream(source);
+    std::string lineText;
+    for (int i = 1; i <= line; ++i)
     {
-        case ASTNodeType::PROGRAM: std::cout << "Program"; break;
-        case ASTNodeType::PACKAGE_STMT:
-            std::cout << "Package: " << dynamic_cast<const PackageStmtNode*>(node)->name; break;
-        case ASTNodeType::IMPORT_STMT:
-            std::cout << "Import: " << dynamic_cast<const ImportStmtNode*>(node)->path; break;
-        case ASTNodeType::USING_DECL:
-            std::cout << "Using: " << dynamic_cast<const UsingDeclNode*>(node)->name; break;
-        case ASTNodeType::FUNCTION_DECL:
-            std::cout << "Func: " << dynamic_cast<const FunctionDeclNode*>(node)->name
-                      << " (body=" << (dynamic_cast<const FunctionDeclNode*>(node)->hasBody ? "yes" : "no") << ")";
-            break;
-        case ASTNodeType::STRUCT_DECL:
+        if (!std::getline(stream, lineText))
         {
-            auto* s = dynamic_cast<const StructDeclNode*>(node);
-            std::cout << (s->isAbstract ? "Abstract: " : "Struct: ") << s->name;
-            if (!s->bases.empty()) std::cout << " : " << s->bases[0];
-            break;
+            return "";
         }
-        case ASTNodeType::IMPL_DECL:
-            std::cout << "Impl: " << dynamic_cast<const ImplDeclNode*>(node)->target; break;
-        case ASTNodeType::VARIABLE_DECL:
-            std::cout << "VarDecl: " << dynamic_cast<const VariableDeclNode*>(node)->name; break;
-        case ASTNodeType::ASSIGNMENT_STMT: std::cout << "Assign"; break;
-        case ASTNodeType::RETURN_STMT: std::cout << "Return"; break;
-        case ASTNodeType::BLOCK_STMT: std::cout << "Block"; break;
-        case ASTNodeType::IF_STMT: std::cout << "If"; break;
-        case ASTNodeType::WHILE_STMT: std::cout << "While"; break;
-        case ASTNodeType::FOR_STMT: std::cout << "For"; break;
-        case ASTNodeType::EXPRESSION_STMT: std::cout << "ExprStmt"; break;
-        case ASTNodeType::FUNCTION_CALL:
-            std::cout << "Call: " << dynamic_cast<const FunctionCallNode*>(node)->name; break;
-        case ASTNodeType::VARIABLE_REF:
-            std::cout << "Var: " << dynamic_cast<const VariableRefNode*>(node)->name; break;
-        case ASTNodeType::LITERAL_INT:
-            std::cout << "Int: " << dynamic_cast<const LiteralIntNode*>(node)->value; break;
-        case ASTNodeType::LITERAL_FLOAT:
-            std::cout << "Float: " << dynamic_cast<const LiteralFloatNode*>(node)->value; break;
-        case ASTNodeType::LITERAL_STRING:
-            std::cout << "String: \"" << dynamic_cast<const LiteralStringNode*>(node)->value << "\""; break;
-        case ASTNodeType::LITERAL_BOOL:
-            std::cout << "Bool: " << (dynamic_cast<const LiteralBoolNode*>(node)->value ? "true" : "false"); break;
-        case ASTNodeType::BINARY_OP:
-        {
-            auto* b = dynamic_cast<const BinaryOpNode*>(node);
-            const char* opName = "?";
-            switch (b->op)
-            {
-                case BinaryOpType::ADD: opName = "ADD"; break;
-                case BinaryOpType::SUB: opName = "SUB"; break;
-                case BinaryOpType::MUL: opName = "MUL"; break;
-                case BinaryOpType::DIV: opName = "DIV"; break;
-                case BinaryOpType::MOD: opName = "MOD"; break;
-            }
-            std::cout << "Binary(" << opName << ")";
-            break;
-        }
-        case ASTNodeType::UNARY_OP:
-        {
-            auto* u = dynamic_cast<const UnaryOpNode*>(node);
-            const char* opName = "?";
-            switch (u->op)
-            {
-                case UnaryOpType::NEG: opName = "NEG"; break;
-                case UnaryOpType::NOT: opName = "NOT"; break;
-                case UnaryOpType::INC: opName = "INC"; break;
-                case UnaryOpType::DEC: opName = "DEC"; break;
-            }
-            std::cout << "Unary(" << opName << ")";
-            break;
-        }
-        case ASTNodeType::COMPARISON_OP:
-        {
-            auto* c = dynamic_cast<const ComparisonOpNode*>(node);
-            const char* opName = "?";
-            switch (c->op)
-            {
-                case ComparisonOpType::EQ: opName = "EQ"; break;
-                case ComparisonOpType::NE: opName = "NE"; break;
-                case ComparisonOpType::LT: opName = "LT"; break;
-                case ComparisonOpType::LE: opName = "LE"; break;
-                case ComparisonOpType::GT: opName = "GT"; break;
-                case ComparisonOpType::GE: opName = "GE"; break;
-            }
-            std::cout << "Cmp(" << opName << ")";
-            break;
-        }
-        case ASTNodeType::LOGICAL_OP:
-        {
-            auto* l = dynamic_cast<const LogicalOpNode*>(node);
-            const char* opName = "?";
-            switch (l->op)
-            {
-                case LogicalOpType::AND: opName = "AND"; break;
-                case LogicalOpType::OR: opName = "OR"; break;
-            }
-            std::cout << "Logical(" << opName << ")";
-            break;
-        }
-        default: std::cout << "Node(" << static_cast<int>(node->type) << ")"; break;
     }
-    std::cout << "\n";
+    return lineText;
 }
 
-void printChildren(const ASTNode* node, int depth = 0)
+// gcc 风格错误输出: file:line:col: error: message\n  行号 源码行\n       ^
+void printError(const std::string& filename, const std::string& source,
+                int line, int column, const std::string& message)
 {
-    if (!node) return;
-    printAST(node, depth);
-    int d = depth + 1;
-
-    if (node->type == ASTNodeType::PROGRAM)
+    std::cerr << filename << ":" << line << ":" << column
+              << ": error: " << message << "\n";
+    std::string lineText = getLine(source, line);
+    if (!lineText.empty())
     {
-        auto* p = dynamic_cast<const ProgramNode*>(node);
-        for (auto& d_ : p->decls) { printChildren(d_.get(), d); }
-    }
-    else if (node->type == ASTNodeType::FUNCTION_DECL)
-    {
-        auto* f = dynamic_cast<const FunctionDeclNode*>(node);
-        for (auto& pa : f->params) printChildren(pa.get(), d);
-        if (f->body) printChildren(f->body.get(), d);
-    }
-    else if (node->type == ASTNodeType::BLOCK_STMT)
-    {
-        auto* b = dynamic_cast<const BlockStmtNode*>(node);
-        for (auto& s_ : b->statements)
-        {
-            printChildren(s_.get(), d);
-        }
-    }
-    else if (node->type == ASTNodeType::STRUCT_DECL)
-    {
-        auto* s = dynamic_cast<const StructDeclNode*>(node);
-        for (auto& m_ : s->members) printChildren(m_.get(), d);
-    }
-    else if (node->type == ASTNodeType::IF_STMT)
-    {
-        auto* i = dynamic_cast<const IfStmtNode*>(node);
-        if (i->condition) printChildren(i->condition.get(), d);
-        if (i->thenBranch) printChildren(i->thenBranch.get(), d);
-        if (i->elseBranch) printChildren(i->elseBranch.get(), d);
-    }
-    else if (node->type == ASTNodeType::WHILE_STMT)
-    {
-        auto* w = dynamic_cast<const WhileStmtNode*>(node);
-        if (w->condition) printChildren(w->condition.get(), d);
-        if (w->body) printChildren(w->body.get(), d);
-    }
-    else if (node->type == ASTNodeType::FOR_STMT)
-    {
-        auto* f = dynamic_cast<const ForStmtNode*>(node);
-        if (f->init) printChildren(f->init.get(), d);
-        if (f->condition) printChildren(f->condition.get(), d);
-        if (f->update) printChildren(f->update.get(), d);
-        if (f->body) printChildren(f->body.get(), d);
-    }
-    else if (node->type == ASTNodeType::VARIABLE_DECL)
-    {
-        auto* v = dynamic_cast<const VariableDeclNode*>(node);
-        if (v->initializer) printChildren(v->initializer.get(), d);
-    }
-    else if (node->type == ASTNodeType::RETURN_STMT)
-    {
-        auto* r = dynamic_cast<const ReturnStmtNode*>(node);
-        if (r->value) printChildren(r->value.get(), d);
-    }
-    else if (node->type == ASTNodeType::ASSIGNMENT_STMT)
-    {
-        auto* a = dynamic_cast<const AssignmentNode*>(node);
-        if (a->target) printChildren(a->target.get(), d);
-        if (a->value) printChildren(a->value.get(), d);
-    }
-    else if (node->type == ASTNodeType::EXPRESSION_STMT)
-    {
-        auto* e = dynamic_cast<const ExpressionStmtNode*>(node);
-        if (e->expr) printChildren(e->expr.get(), d);
-    }
-    else if (node->type == ASTNodeType::FUNCTION_CALL)
-    {
-        auto* c = dynamic_cast<const FunctionCallNode*>(node);
-        for (auto& a_ : c->arguments) printChildren(a_.get(), d);
-    }
-    else if (node->type == ASTNodeType::BINARY_OP)
-    {
-        auto* b = dynamic_cast<const BinaryOpNode*>(node);
-        printChildren(b->lift.get(), d);
-        printChildren(b->right.get(), d);
-    }
-    else if (node->type == ASTNodeType::COMPARISON_OP)
-    {
-        auto* c = dynamic_cast<const ComparisonOpNode*>(node);
-        printChildren(c->lift.get(), d);
-        printChildren(c->right.get(), d);
-    }
-    else if (node->type == ASTNodeType::LOGICAL_OP)
-    {
-        auto* l = dynamic_cast<const LogicalOpNode*>(node);
-        printChildren(l->lift.get(), d);
-        printChildren(l->right.get(), d);
-    }
-    else if (node->type == ASTNodeType::UNARY_OP)
-    {
-        auto* u = dynamic_cast<const UnaryOpNode*>(node);
-        printChildren(u->operand.get(), d);
-    }
-    else
-    {
-        // leaf node, already printed
+        std::cerr << "  " << line << " | " << lineText << "\n";
+        std::cerr << "  " << std::string(std::to_string(line).size(), ' ') << " | "
+                  << std::string(column - 1, ' ') << "^" << "\n";
     }
 }
 
-int main() {
-    std::string source =
-        "package foo;\n"
-        "import std.vector;\n"
-        "\n"
-        "func main() -> int {\n"
-        "    var: int a = 1 + 2 * 3;\n"
-        "    var: int b = 0xFF;\n"
-        "    if (a >= 10) {\n"
-        "        a = a - 5;\n"
-        "    } else {\n"
-        "        a += 1;\n"
-        "    }\n"
-        "    while (a < 10) { a++; }\n"
-        "    return a;\n"
-        "}\n";
-
-    Lexer lexer(source);
-    auto tokens = lexer.scanTokens();
-    for (const auto& tok : tokens) {
-        if (tok.type == TokenType::ERROR) {
-            std::cerr << "lexical error: " << tok.toString() << "\n";
-            return 1;
-        }
+// gcc 风格警告输出
+void printWarning(const std::string& filename, const std::string& source,
+                  int line, int column, const std::string& message)
+{
+    std::cerr << filename << ":" << line << ":" << column
+              << ": warning: " << message << "\n";
+    std::string lineText = getLine(source, line);
+    if (!lineText.empty())
+    {
+        std::cerr << "  " << line << " | " << lineText << "\n";
+        std::cerr << "  " << std::string(std::to_string(line).size(), ' ') << " | "
+                  << std::string(column - 1, ' ') << "^" << "\n";
     }
+}
 
-    Parser parser(tokens);
-    try {
-        auto program = parser.parse();
-        printAST(program.get());
-        printChildren(program.get());
-    } catch (const std::exception& e) {
-        std::cerr << "parse error: " << e.what() << "\n";
+int main(int argc, char* argv[])
+{
+    if (argc < 2)
+    {
+        std::cerr << "usage: PLang <source.plang>\n";
         return 1;
     }
-    std::cout << "parsing passed\n";
+
+    std::string filename = argv[1];
+    std::ifstream file(filename);
+    if (!file.is_open())
+    {
+        std::cerr << filename << ": error: cannot open file\n";
+        return 1;
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string source = buffer.str();
+
+    // 词法分析
+    Lexer lexer(source);
+    auto tokens = lexer.scanTokens();
+    int lexErrors = 0;
+    for (const auto& tok : tokens)
+    {
+        if (tok.type == TokenType::ERROR)
+        {
+            printError(filename, source, tok.line, tok.column, tok.text);
+            lexErrors++;
+        }
+    }
+    if (lexErrors > 0) return 1;
+
+    // 语法分析
+    Parser parser(tokens);
+    std::unique_ptr<ProgramNode> program;
+    try
+    {
+        program = parser.parse();
+    }
+    catch (const std::exception& e)
+    {
+        // Parser 的异常信息不含行列，需要从最近的错误位置补
+        printError(filename, source, parser.getErrorLine(), parser.getErrorColumn(), e.what());
+        return 1;
+    }
+
+    // 语义分析
+    Sema sema;
+    bool ok = sema.analyze(program);
+    for (const auto& w : sema.getWarnings())
+    {
+        printWarning(filename, source, w.line, w.column, w.message);
+    }
+    if (!ok)
+    {
+        for (const auto& err : sema.getErrors())
+        {
+            printError(filename, source, err.line, err.column, err.message);
+        }
+        return 1;
+    }
+
+    std::cout << "analysis passed\n";
     return 0;
 }

@@ -1,0 +1,102 @@
+package demo;
+import std.vector;
+import std.string;
+
+/* 块注释 */
+// 行注释
+
+// 匿名结构体 using
+using Point = struct {
+    pub val: int x;
+    pub val: int y;
+};
+
+using Shape = abstract {
+    pub func area() -> f64;
+};
+using Circle = struct : pub Shape {
+    pub val: f64 r;
+    pub val: f128 r;
+    pub func area() -> f64 {
+        return 3.14 * this.r * this.r;
+    }
+};
+
+// 函数定义与调用
+func add(val: int a, val: int b) -> int {
+    return a + b;
+}
+
+func useMoved(val: string s) -> int {
+    var: string copy = s;
+    return 1;
+}
+
+func main() -> int {
+    // 基本类型变量
+    var: i32 a = 42;
+    val: i64 big = 0xFF;
+    var: f64 pi = 3.14;
+    var: string name = "plang";
+    var: char c = 'x';
+    var: bool flag = true;
+
+    // 数字字面量进制
+    var: u32 hex = 0xFF;
+    var: u32 oct = 0o17;
+    var: u32 bin = 0b1010;
+    var: i64 l = 1ll;
+    var: f32 f = 2.5f;
+
+    // 类型推导
+    var inferred = 100;
+
+    // 指针与引用
+    var -> var: int p = &a;
+    var ref@a;
+    *p = 1;
+
+    // 数组
+    var: int[3] arr = {1, 2, 3};
+
+    // 结构体实例化
+    var: Point point = {10, 20};
+
+    // 运算符
+    var: int x = 1 + 2 * 3;
+    var: bool cmp = (x >= 10) && (x != 5);
+    var: int bit = (x & 1) | (x << 2);
+    x += 5;
+    x %= 3;
+    x++;
+    x--;
+
+    // 类型转换
+    var: int y = int as 3.14;
+
+    // 控制流
+    if (x > 10) {
+        x = add(x, 1);
+    } else if (x == 10) {
+        x = add(x, 2);
+    } else {
+        x = add(x, 3);
+    }
+
+    while (x < 20) {
+        x++;
+    }
+
+    for (var: int i = 0; i < 5; i++) {
+        x = x + i;
+    }
+
+    // 函数调用
+    var: int sum = add(10, 20);
+
+    // 接口动态分派
+    var: Circle circle = {5};
+    var: f64 area = circle.area();
+
+    return sum;
+}

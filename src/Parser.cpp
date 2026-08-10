@@ -15,13 +15,14 @@ std::unique_ptr<ProgramNode> Parser::parse()
     // package 声明（可选但应在前）
     if (match(TokenType::PACKAGE))
     {
-        auto pkg = parsePackage();
-        auto pkgNode = dynamic_cast<PackageStmtNode*>(pkg.get());
+        auto pkgDecl = parsePackage();
+        auto pkgNode = dynamic_cast<PackageStmtNode*>(pkgDecl.get());
         if (pkgNode) program->packageName = pkgNode->name;
     }
 
     while (!isAtEnd())
     {
+        if (match(TokenType::SEMICOLON)) continue; // 跳过多余分号
         if (match(TokenType::IMPORT))
         {
             program->imports.push_back(parseImport());
@@ -43,6 +44,13 @@ bool Parser::isAtEnd() const
 Token Parser::peek() const
 {
     return tokens[pos];
+}
+
+Token Parser::peek(size_t offset) const
+{
+    size_t idx = pos + offset;
+    if (idx >= tokens.size()) return tokens.back();
+    return tokens[idx];
 }
 
 Token Parser::previous() const
@@ -88,9 +96,9 @@ bool Parser::matchAny(const std::vector<TokenType>& types)
 Token Parser::expect(TokenType type, const std::string& message)
 {
     if (check(type)) return advance();
-    std::cerr << "syntax error " << peek().line << ":" << peek().column << " - " << message
-              << " (expected " << static_cast<int>(type) << ", got " << peek().text << ")\n";
-    throw std::runtime_error("parse error");
+    errorLine = peek().line;
+    errorColumn = peek().column;
+    throw std::runtime_error("expected " + message + " but got '" + peek().text + "'");
 }
 
 std::unique_ptr<TypeNode> Parser::parseType()
@@ -118,8 +126,13 @@ std::unique_ptr<TypeNode> Parser::parseType()
         pos--;
     }
 
-    // 数组类型: T[expr]
-    auto t = parsePrimitiveType();
+    return parseTypeSuffix();
+}
+
+// 类型（不含 var/val 修饰符前缀）
+std::unique_ptr<TypeNode> Parser::parseTypeSuffix()
+{
+    auto typeNode = parsePrimitiveType();
 
     // 后缀数组 T[n]
     while (match(TokenType::LBRACKET))
@@ -130,10 +143,10 @@ std::unique_ptr<TypeNode> Parser::parseType()
             size = std::stoi(advance().text);
         }
         expect(TokenType::RBRACKET, "expected ] to close array length");
-        t = std::make_unique<TypeNode>(ASTNodeType::TYPE_ARRAY, "", peek().line, peek().column,
-                                       size, std::move(t));
+        typeNode = std::make_unique<TypeNode>(ASTNodeType::TYPE_ARRAY, "", peek().line, peek().column,
+                                            size, std::move(typeNode));
     }
-    return t;
+    return typeNode;
 }
 
 std::unique_ptr<TypeNode> Parser::parsePrimitiveType()
@@ -141,32 +154,33 @@ std::unique_ptr<TypeNode> Parser::parsePrimitiveType()
     Token tok = peek();
     std::string name = tok.text;
 
-    ASTNodeType t;
+    ASTNodeType nodeType;
     switch (tok.type)
     {
-        case TokenType::I8: t = ASTNodeType::TYPE_I8; break;
-        case TokenType::I16: t = ASTNodeType::TYPE_I16; break;
-        case TokenType::I32: t = ASTNodeType::TYPE_I32; break;
-        case TokenType::I64: t = ASTNodeType::TYPE_I64; break;
-        case TokenType::INT: t = ASTNodeType::TYPE_I32; break;
-        case TokenType::U8: t = ASTNodeType::TYPE_U8; break;
-        case TokenType::U16: t = ASTNodeType::TYPE_U16; break;
-        case TokenType::U32: t = ASTNodeType::TYPE_U32; break;
-        case TokenType::U64: t = ASTNodeType::TYPE_U64; break;
-        case TokenType::UINT: t = ASTNodeType::TYPE_U32; break;
-        case TokenType::F32: t = ASTNodeType::TYPE_F32; break;
-        case TokenType::F64: t = ASTNodeType::TYPE_F64; break;
-        case TokenType::CHAR: t = ASTNodeType::TYPE_CHAR; break;
-        case TokenType::STRING_TYPE: t = ASTNodeType::TYPE_STRING; break;
-        case TokenType::BOOL: t = ASTNodeType::TYPE_BOOL; break;
-        case TokenType::THIS_TYPE: t = ASTNodeType::TYPE_TYPE; break;
-        case TokenType::IDENT: t = ASTNodeType::TYPE_PRIMITIVE; break;
+        case TokenType::I8: nodeType = ASTNodeType::TYPE_I8; break;
+        case TokenType::I16: nodeType = ASTNodeType::TYPE_I16; break;
+        case TokenType::I32: nodeType = ASTNodeType::TYPE_I32; break;
+        case TokenType::I64: nodeType = ASTNodeType::TYPE_I64; break;
+        case TokenType::INT: nodeType = ASTNodeType::TYPE_I32; break;
+        case TokenType::U8: nodeType = ASTNodeType::TYPE_U8; break;
+        case TokenType::U16: nodeType = ASTNodeType::TYPE_U16; break;
+        case TokenType::U32: nodeType = ASTNodeType::TYPE_U32; break;
+        case TokenType::U64: nodeType = ASTNodeType::TYPE_U64; break;
+        case TokenType::UINT: nodeType = ASTNodeType::TYPE_U32; break;
+        case TokenType::F32: nodeType = ASTNodeType::TYPE_F32; break;
+        case TokenType::F64: nodeType = ASTNodeType::TYPE_F64; break;
+        case TokenType::CHAR: nodeType = ASTNodeType::TYPE_CHAR; break;
+        case TokenType::STRING_TYPE: nodeType = ASTNodeType::TYPE_STRING; break;
+        case TokenType::BOOL: nodeType = ASTNodeType::TYPE_BOOL; break;
+        case TokenType::THIS_TYPE: nodeType = ASTNodeType::TYPE_TYPE; break;
+        case TokenType::IDENT: nodeType = ASTNodeType::TYPE_PRIMITIVE; break;
         default:
-            std::cerr << "syntax error " << tok.line << ":" << tok.column << " - expected type, got " << tok.text << "\n";
-            throw std::runtime_error("parse error");
+            errorLine = tok.line;
+            errorColumn = tok.column;
+            throw std::runtime_error("expected type, got '" + tok.text + "'");
     }
     advance();
-    return std::make_unique<TypeNode>(t, name, tok.line, tok.column);
+    return std::make_unique<TypeNode>(nodeType, name, tok.line, tok.column);
 }
 
 std::unique_ptr<ASTNode> Parser::parseDeclaration()
@@ -176,9 +190,9 @@ std::unique_ptr<ASTNode> Parser::parseDeclaration()
     if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT)) return parseStructDecl();
     if (check(TokenType::IMPL)) return parseImplDecl();
 
-    std::cerr << "syntax error " << peek().line << ":" << peek().column
-              << " - expected top-level declaration (using/func/struct/impl), got " << peek().text << "\n";
-    throw std::runtime_error("parse error");
+    errorLine = peek().line;
+    errorColumn = peek().column;
+    throw std::runtime_error("expected top-level declaration (using/func/struct/impl), got '" + peek().text + "'");
 }
 
 std::unique_ptr<ASTNode> Parser::parsePackage()
@@ -191,15 +205,29 @@ std::unique_ptr<ASTNode> Parser::parsePackage()
 std::unique_ptr<ASTNode> Parser::parseImport()
 {
     std::string path;
-    Token first = expect(TokenType::IDENT, "expected import path");
+    Token first = expectPathSegment("expected import path");
     path = first.text;
     while (match(TokenType::DOT))
     {
-        Token part = expect(TokenType::IDENT, "expected path segment");
+        Token part = expectPathSegment("expected path segment");
         path += "." + part.text;
     }
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<ImportStmtNode>(path, first.line, first.column);
+}
+
+Token Parser::expectPathSegment(const std::string& message)
+{
+    if (check(TokenType::IDENT) ||
+        check(TokenType::INT) || check(TokenType::CHAR) || check(TokenType::STRING_TYPE) ||
+        check(TokenType::WCHAR) || check(TokenType::WSTRING) || check(TokenType::BOOL) ||
+        check(TokenType::I8) || check(TokenType::I16) || check(TokenType::I32) || check(TokenType::I64) ||
+        check(TokenType::U8) || check(TokenType::U16) || check(TokenType::U32) || check(TokenType::U64) ||
+        check(TokenType::UINT) || check(TokenType::F32) || check(TokenType::F64))
+    {
+        return advance();
+    }
+    return expect(TokenType::IDENT, message);
 }
 
 std::unique_ptr<ASTNode> Parser::parseUsing()
@@ -210,7 +238,14 @@ std::unique_ptr<ASTNode> Parser::parseUsing()
 
     if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT))
     {
-        aliased = parseStructDecl();
+        aliased = parseStructDecl(true);
+        // 匿名结构体：把 using 的别名作为结构体名
+        if (aliased->type == ASTNodeType::STRUCT_DECL)
+        {
+            auto* structNode = dynamic_cast<StructDeclNode*>(aliased.get());
+            if (structNode->name.empty()) structNode->name = name.text;
+        }
+        expect(TokenType::SEMICOLON, "expected ; after using struct");
     }
     else
     {
@@ -220,21 +255,21 @@ std::unique_ptr<ASTNode> Parser::parseUsing()
         {
             path += "." + expect(TokenType::IDENT, "expected path segment").text;
         }
-        std::unique_ptr<TypeNode> ty;
+        std::unique_ptr<TypeNode> typeAlias;
         if (match(TokenType::LT))
         {
             // 泛型参数：解析第一个类型参数（简化）
             auto firstArg = parseType();
             while (match(TokenType::COMMA)) { parseType(); }
             expect(TokenType::GT, "expected > to close generics");
-            ty = std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, path, name.line, name.column);
+            typeAlias = std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, path, name.line, name.column);
         }
         else
         {
-            ty = std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, path, name.line, name.column);
+            typeAlias = std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, path, name.line, name.column);
         }
         expect(TokenType::SEMICOLON, "expected ;");
-        aliased = std::move(ty);
+        aliased = std::move(typeAlias);
     }
     return std::make_unique<UsingDeclNode>(name.text, std::move(aliased), name.line, name.column);
 }
@@ -254,7 +289,7 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
         typeParams = parseTypeParams();
     }
 
-    auto fn = std::make_unique<FunctionDeclNode>(name.text, name.line, name.column);
+    auto fnDecl = std::make_unique<FunctionDeclNode>(name.text, name.line, name.column);
 
     expect(TokenType::LPAREN, "expected (");
     if (!check(TokenType::RPAREN))
@@ -264,42 +299,67 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
             bool isVar = true;
             if (match(TokenType::VAL)) isVar = false;
             else if (match(TokenType::VAR)) isVar = true;
-            else throw std::runtime_error("expected parameter modifier val/var");
+            else
+            {
+                errorLine = peek().line;
+                errorColumn = peek().column;
+                throw std::runtime_error("expected parameter modifier val/var");
+            }
 
-            auto type = parseType();
+            expect(TokenType::COLON, "expected : after parameter modifier");
+            auto type = parseTypeSuffix();
             Token pname = expect(TokenType::IDENT, "expected parameter name");
-            fn->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(type),
+            fnDecl->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(type),
                                                                  pname.line, pname.column));
-        } while (match(TokenType::COMMA));
-    }
+        } while (match(TokenType::COMMA));    }
     expect(TokenType::RPAREN, "expected )");
 
     // 返回类型
     if (match(TokenType::ARROW))
     {
-        fn->returnType = parseType();
+        fnDecl->returnType = parseType();
     }
 
     if (match(TokenType::SEMICOLON))
     {
-        fn->hasBody = false; // 仅声明，由 impl 实现
-        return fn;
+        fnDecl->hasBody = false; // 仅声明，由 impl 实现
+        return fnDecl;
     }
 
-    fn->hasBody = true;
-    fn->body = std::make_unique<BlockStmtNode>(peek().line, peek().column);
+    fnDecl->hasBody = true;
+    fnDecl->body = std::make_unique<BlockStmtNode>(peek().line, peek().column);
     auto block = parseBlock();
-    fn->body = std::unique_ptr<BlockStmtNode>(dynamic_cast<BlockStmtNode*>(block.release()));
-    return fn;
+    fnDecl->body = std::unique_ptr<BlockStmtNode>(dynamic_cast<BlockStmtNode*>(block.release()));
+    return fnDecl;
 }
 
-std::unique_ptr<ASTNode> Parser::parseStructDecl()
+std::unique_ptr<ASTNode> Parser::parseStructDecl(bool allowAnonymous)
 {
     bool isAbstract = match(TokenType::ABSTRACT);
-    expect(TokenType::STRUCT, "expected struct");
+    if (check(TokenType::STRUCT))
+    {
+        advance();
+    }
+    else if (!isAbstract)
+    {
+        expect(TokenType::STRUCT, "expected struct");
+    }
 
-    Token name = expect(TokenType::IDENT, "expected struct name");
-    auto st = std::make_unique<StructDeclNode>(name.text, isAbstract, name.line, name.column);
+    std::string structName;
+    int line = peek().line;
+    int column = peek().column;
+    if (allowAnonymous && (check(TokenType::LBRACE) || check(TokenType::COLON) || check(TokenType::LT)))
+    {
+        structName = "";
+    }
+    else
+    {
+        Token name = expect(TokenType::IDENT, "expected struct name");
+        structName = name.text;
+        line = name.line;
+        column = name.column;
+    }
+    auto structNode = std::make_unique<StructDeclNode>(structName, isAbstract, line, column);
 
     // 泛型 <T: type>
     if (match(TokenType::LT))
@@ -313,18 +373,34 @@ std::unique_ptr<ASTNode> Parser::parseStructDecl()
         do
         {
             match(TokenType::PUB);
-            st->bases.push_back(expect(TokenType::IDENT, "expected base class name").text);
+            structNode->bases.push_back(expect(TokenType::IDENT, "expected base class name").text);
         } while (match(TokenType::COMMA));
     }
 
     expect(TokenType::LBRACE, "expected {");
     while (!check(TokenType::RBRACE) && !isAtEnd())
     {
-        st->members.push_back(parseStatement());
+        if (match(TokenType::SEMICOLON)) continue; // 跳过多余分号
+        // 访问权限修饰符 pub/prt/pri（可选）
+        matchAny({TokenType::PUB, TokenType::PRT, TokenType::PRI});
+        if (check(TokenType::FUNC))
+        {
+            structNode->members.push_back(parseFunctionDecl());
+        }
+        else if (check(TokenType::DOT))
+        {
+            // .特殊函数（构造/析构等），先跳过点号再解析
+            advance();
+            structNode->members.push_back(parseFunctionDecl());
+        }
+        else
+        {
+            structNode->members.push_back(parseStatement());
+        }
     }
     expect(TokenType::RBRACE, "expected }");
 
-    return st;
+    return structNode;
 }
 
 std::unique_ptr<ASTNode> Parser::parseImplDecl()
@@ -336,14 +412,14 @@ std::unique_ptr<ASTNode> Parser::parseImplDecl()
         target += "." + expect(TokenType::IDENT, "expected member name").text;
     }
 
-    auto impl = std::make_unique<ImplDeclNode>(target, peek().line, peek().column);
+    auto implNode = std::make_unique<ImplDeclNode>(target, peek().line, peek().column);
     expect(TokenType::LBRACE, "expected {");
     while (!check(TokenType::RBRACE) && !isAtEnd())
     {
-        impl->members.push_back(parseStatement());
+        implNode->members.push_back(parseStatement());
     }
     expect(TokenType::RBRACE, "expected }");
-    return impl;
+    return implNode;
 }
 
 std::unique_ptr<ASTNode> Parser::parseStatement()
@@ -377,7 +453,12 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
     bool isVar;
     if (match(TokenType::VAL)) isVar = false;
     else if (match(TokenType::VAR)) isVar = true;
-    else throw std::runtime_error("expected var/val");
+    else
+    {
+        errorLine = peek().line;
+        errorColumn = peek().column;
+        throw std::runtime_error("expected var/val");
+    }
 
     bool isMoved = false;
     std::unique_ptr<TypeNode> type;
@@ -387,10 +468,21 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
     // 指针类型: var -> var: T p
     if (check(TokenType::ARROW))
     {
-        // 形如 var -> var: T name 的指针声明
-        // 但 parseVarDecl 已在 parseStatement 中被检查到 VAR/VAL 开头的声明
-        // 这里处理 var/val -> ... 形式
-        type = parseType(); // parseType 内部处理 var/val -> ...
+        advance(); // 消费 ->
+        bool innerConst = false;
+        if (match(TokenType::VAR)) { /* rw */ }
+        else if (match(TokenType::VAL)) { innerConst = true; }
+        std::unique_ptr<TypeNode> inner;
+        if (match(TokenType::COLON))
+        {
+            inner = parseTypeSuffix();
+        }
+        else
+        {
+            inner = parsePrimitiveType();
+        }
+        type = std::make_unique<TypeNode>(ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                                          0, std::move(inner), innerConst);
         name = expect(TokenType::IDENT, "expected variable name").text;
     }
     else if (check(TokenType::COLON))
@@ -405,13 +497,28 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
         name = expect(TokenType::IDENT, "expected variable name").text;
     }
 
+    // 引用声明: var ref@target
+    if (match(TokenType::AT))
+    {
+        std::string target = expect(TokenType::IDENT, "expected reference target").text;
+        init = std::make_unique<VariableRefNode>(target, previous().line, previous().column);
+    }
+
     if (match(TokenType::ASSIGN))
     {
         if (match(TokenType::MOVE))
         {
             isMoved = true;
         }
-        init = parseExpression();
+        if (check(TokenType::LBRACE))
+        {
+            // 结构体/数组初始化 {1, 2, 3}
+            init = parseInitList();
+        }
+        else
+        {
+            init = parseExpression();
+        }
     }
 
     expect(TokenType::SEMICOLON, "expected ;");
@@ -524,6 +631,25 @@ std::unique_ptr<ASTNode> Parser::parseExprStmt()
 
 std::unique_ptr<ASTNode> Parser::parseExpression()
 {
+    // 类型转换: TargetType as expr
+    if (check(TokenType::INT) || check(TokenType::I8) || check(TokenType::I16) ||
+        check(TokenType::I32) || check(TokenType::I64) || check(TokenType::U8) ||
+        check(TokenType::U16) || check(TokenType::U32) || check(TokenType::U64) ||
+        check(TokenType::UINT) || check(TokenType::F32) || check(TokenType::F64) ||
+        check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::BOOL))
+    {
+        // 先看看是否是指针类型 var/val -> ... 或普通 as 转换
+        // 尝试匹配 as: int as expr
+        if (peek(1).type == TokenType::AS)
+        {
+            std::string targetType = advance().text;
+            int line = previous().line;
+            int column = previous().column;
+            advance(); // 消费 as
+            auto value = parseExpression();
+            return std::make_unique<CastNode>(targetType, std::move(value), line, column);
+        }
+    }
     return parseAssignment();
 }
 
@@ -770,13 +896,12 @@ std::unique_ptr<ASTNode> Parser::parseUnary()
     if (match(TokenType::STAR))
     {
         auto operand = parseUnary();
-        return std::make_unique<UnaryOpNode>(UnaryOpType::NEG, std::move(operand));
+        return std::make_unique<UnaryOpNode>(UnaryOpType::DEREF, std::move(operand));
     }
     if (match(TokenType::AMP))
     {
         auto operand = parseUnary();
-        // 取地址：简化处理为 VariableRef 包装，后续可细化 AddressOfNode
-        return operand;
+        return std::make_unique<AddressOfNode>(std::move(operand), previous().line, previous().column);
     }
     if (match(TokenType::TILDE))
     {
@@ -812,7 +937,11 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
             }
             else
             {
-                throw std::runtime_error("cannot call this expression");
+                {
+                    errorLine = peek().line;
+                    errorColumn = peek().column;
+                    throw std::runtime_error("cannot call this expression");
+                }
             }
         }
         else if (match(TokenType::INC))
@@ -837,10 +966,19 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
         bool isFloat = text.find('.') != std::string::npos;
         if (isFloat)
         {
-            return std::make_unique<LiteralFloatNode>(std::stod(text), previous().line, previous().column);
+            // 提取后缀 (f/F)
+            std::string numPart = text;
+            std::string suffix;
+            if (!numPart.empty() && (numPart.back() == 'f' || numPart.back() == 'F'))
+            {
+                suffix = "f";
+                numPart.pop_back();
+            }
+            return std::make_unique<LiteralFloatNode>(std::stod(numPart), previous().line, previous().column, suffix);
         }
         // 处理进制前缀
         long long value;
+        std::string suffix;
         if (text.rfind("0x", 0) == 0 || text.rfind("0X", 0) == 0)
         {
             value = std::stoll(text.substr(2), nullptr, 16);
@@ -855,9 +993,21 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
         }
         else
         {
-            value = std::stoll(text);
+            // 提取整数后缀 ll/L
+            std::string numPart = text;
+            if (numPart.size() >= 2 && (numPart.compare(numPart.size() - 2, 2, "ll") == 0))
+            {
+                suffix = "ll";
+                numPart = numPart.substr(0, numPart.size() - 2);
+            }
+            else if (!numPart.empty() && (numPart.back() == 'l' || numPart.back() == 'L'))
+            {
+                suffix = "l";
+                numPart.pop_back();
+            }
+            value = std::stoll(numPart);
         }
-        return std::make_unique<LiteralIntNode>(value, previous().line, previous().column);
+        return std::make_unique<LiteralIntNode>(value, previous().line, previous().column, suffix);
     }
     if (match(TokenType::STRING))
     {
@@ -865,7 +1015,7 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
     }
     if (match(TokenType::CHAR_LIT))
     {
-        return std::make_unique<LiteralStringNode>(previous().text, previous().line, previous().column);
+        return std::make_unique<LiteralStringNode>(previous().text, previous().line, previous().column, true);
     }
     if (match(TokenType::TRUE))
     {
@@ -889,7 +1039,9 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
         expect(TokenType::RPAREN, "expected )");
         return expr;
     }
-    throw std::runtime_error("syntax error: expected expression, got " + peek().text);
+    errorLine = peek().line;
+    errorColumn = peek().column;
+    throw std::runtime_error("expected expression, got '" + peek().text + "'");
 }
 
 std::vector<std::unique_ptr<ASTNode>> Parser::parseArguments()
@@ -923,4 +1075,19 @@ std::vector<std::string> Parser::parseTypeParams()
     } while (match(TokenType::COMMA));
     expect(TokenType::GT, "expected > to close template parameters");
     return params;
+}
+
+std::unique_ptr<ASTNode> Parser::parseInitList()
+{
+    expect(TokenType::LBRACE, "expected {");
+    auto block = std::make_unique<BlockStmtNode>(previous().line, previous().column);
+    if (!check(TokenType::RBRACE))
+    {
+        do
+        {
+            block->statements.push_back(parseExpression());
+        } while (match(TokenType::COMMA));
+    }
+    expect(TokenType::RBRACE, "expected }");
+    return block;
 }

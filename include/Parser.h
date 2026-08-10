@@ -12,25 +12,33 @@ class Parser
 private:
     std::vector<Token> tokens;
     size_t pos;
+    int errorLine = 0;
+    int errorColumn = 0;
 
 public:
     explicit Parser(std::vector<Token> tokens);
 
     std::unique_ptr<ProgramNode> parse();
 
+    int getErrorLine() const { return errorLine; }
+    int getErrorColumn() const { return errorColumn; }
+
 private:
     // 基础工具
     Token peek() const;
+    Token peek(size_t offset) const;
     Token previous() const;
     Token advance();
     bool check(TokenType type) const;
     bool match(TokenType type);
     bool matchAny(const std::vector<TokenType>& types);
     Token expect(TokenType type, const std::string& message);
+    Token expectPathSegment(const std::string& message);
     bool isAtEnd() const;
 
     // 类型解析
     std::unique_ptr<TypeNode> parseType();
+    std::unique_ptr<TypeNode> parseTypeSuffix();
     std::unique_ptr<TypeNode> parsePrimitiveType();
 
     // 顶层声明
@@ -39,7 +47,7 @@ private:
     std::unique_ptr<ASTNode> parseImport();
     std::unique_ptr<ASTNode> parseUsing();
     std::unique_ptr<ASTNode> parseFunctionDecl();
-    std::unique_ptr<ASTNode> parseStructDecl();
+    std::unique_ptr<ASTNode> parseStructDecl(bool allowAnonymous = false);
     std::unique_ptr<ASTNode> parseImplDecl();
 
     // 语句
@@ -71,6 +79,7 @@ private:
     std::unique_ptr<ASTNode> parsePrimary();
 
     // 辅助
+    std::unique_ptr<ASTNode> parseInitList();
     std::vector<std::unique_ptr<ASTNode>> parseArguments();
     std::vector<std::string> parseTypeParams();
 };
