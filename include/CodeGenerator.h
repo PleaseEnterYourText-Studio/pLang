@@ -25,7 +25,14 @@ private:
     llvm::IRBuilder<> builder;
 
     llvm::Function* currentFunction;
-    std::unordered_map<std::string, llvm::Value*> namedValues;
+
+    // 变量指针 + 其类型
+    struct VarInfo
+    {
+        llvm::AllocaInst* ptr;
+        llvm::Type* type;
+    };
+    std::unordered_map<std::string, VarInfo> namedValues;
 
     llvm::Type* getLLVMType(ASTNodeType type);
     llvm::Type* getLLVMType(TypeNode* type);
@@ -34,6 +41,7 @@ private:
     llvm::Value* getVariable(const std::string& name);
     llvm::Value* generateExpression(ASTNode* node);
     void generateStatement(ASTNode* node);
+    void generateFunction(FunctionDeclNode* fn);
 
 public:
     CodeGenerator();

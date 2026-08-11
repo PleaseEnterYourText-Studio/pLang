@@ -19,8 +19,9 @@ llvm::Type* CodeGenerator::getLLVMType(ASTNodeType type)
             return llvm::Type::getInt16Ty(context);
         case ASTNodeType::TYPE_I32:
         case ASTNodeType::TYPE_U32:
-        case ASTNodeType::TYPE_BOOL:
             return llvm::Type::getInt32Ty(context);
+        case ASTNodeType::TYPE_BOOL:
+            return llvm::Type::getInt1Ty(context);
         case ASTNodeType::TYPE_I64:
         case ASTNodeType::TYPE_U64:
             return llvm::Type::getInt64Ty(context);
@@ -30,6 +31,11 @@ llvm::Type* CodeGenerator::getLLVMType(ASTNodeType type)
             return llvm::Type::getDoubleTy(context);
         case ASTNodeType::TYPE_VOID:
             return llvm::Type::getVoidTy(context);
+        case ASTNodeType::TYPE_POINTER:
+        case ASTNodeType::TYPE_STRING:
+            return llvm::PointerType::get(context, 0);
+        case ASTNodeType::TYPE_ARRAY:
+            return llvm::ArrayType::get(llvm::Type::getInt32Ty(context), 0);
         default:
             return llvm::Type::getInt32Ty(context);
     }
@@ -37,16 +43,16 @@ llvm::Type* CodeGenerator::getLLVMType(ASTNodeType type)
 
 llvm::Type* CodeGenerator::getLLVMType(TypeNode* type)
 {
-    if (!type) return llvm::Type::getVoidTy(context);
-    
+    if (!type) return llvm::Type::getInt32Ty(context);
+
     if (type->baseType == ASTNodeType::TYPE_POINTER) {
-        auto innerType = getLLVMType(type->inner.get());
         return llvm::PointerType::get(context, 0);
     }
 
     if (type->baseType == ASTNodeType::TYPE_ARRAY) {
         auto innerType = getLLVMType(type->inner.get());
-        return llvm::ArrayType::get(innerType, type->arraySize);
+        int size = type->arraySize > 0 ? type->arraySize : 0;
+        return llvm::ArrayType::get(innerType, size);
     }
 
     return getLLVMType(type->baseType);
@@ -58,14 +64,18 @@ llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
         return llvm::Type::getInt8Ty(context);
     } else if (typeName == "i16" || typeName == "u16") {
         return llvm::Type::getInt16Ty(context);
-    } else if (typeName == "i32" || typeName == "u32" || typeName == "int" || typeName == "uint" || typeName == "bool") {
+    } else if (typeName == "i32" || typeName == "u32" || typeName == "int" || typeName == "uint") {
         return llvm::Type::getInt32Ty(context);
+    } else if (typeName == "bool") {
+        return llvm::Type::getInt1Ty(context);
     } else if (typeName == "i64" || typeName == "u64") {
         return llvm::Type::getInt64Ty(context);
     } else if (typeName == "f32") {
         return llvm::Type::getFloatTy(context);
     } else if (typeName == "f64") {
         return llvm::Type::getDoubleTy(context);
+    } else if (typeName == "string" || typeName == "pointer") {
+        return llvm::PointerType::get(context, 0);
     } else if (typeName == "void") {
         return llvm::Type::getVoidTy(context);
     }
@@ -79,7 +89,7 @@ llvm::Value* CodeGenerator::getVariable(const std::string& name)
         std::cerr << "Error: Variable '" << name << "' not declared" << std::endl;
         return nullptr;
     }
-    return builder.CreateLoad(getLLVMType(ASTNodeType::TYPE_I32), it->second, name);
+    return builder.CreateLoad(it->second.type, it->second.ptr, name);
 }
 
 llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
@@ -89,11 +99,16 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
     switch (node->type) {
         case ASTNodeType::LITERAL_INT: {
             auto* lit = static_cast<LiteralIntNode*>(node);
-            return llvm::ConstantInt::get(context, llvm::APInt(32, lit->value, true));
+            // 根据后缀决定宽度
+            int bits = (lit->suffix == "ll" || lit->suffix == "LL") ? 64 : 32;
+            return llvm::ConstantInt::get(context, llvm::APInt(bits, (uint64_t)lit->value, true));
         }
 
         case ASTNodeType::LITERAL_FLOAT: {
             auto* lit = static_cast<LiteralFloatNode*>(node);
+            if (lit->suffix == "f") {
+                return llvm::ConstantFP::get(context, llvm::APFloat((float)lit->value));
+            }
             return llvm::ConstantFP::get(context, llvm::APFloat(lit->value));
         }
 
@@ -104,6 +119,11 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
         case ASTNodeType::LITERAL_STRING: {
             auto* lit = static_cast<LiteralStringNode*>(node);
+            if (lit->isChar) {
+                // char 字面量: 取第一个字符的 ASCII 码
+                char c = lit->value.empty() ? '\0' : lit->value[0];
+                return llvm::ConstantInt::get(context, llvm::APInt(8, (uint64_t)(unsigned char)c));
+            }
             return builder.CreateGlobalString(lit->value, "str");
         }
 
@@ -118,21 +138,34 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             auto* right = generateExpression(bin->right.get());
 
             switch (bin->op) {
-                case BinaryOpType::ADD:
-                    return builder.CreateAdd(left, right, "add");
-                case BinaryOpType::SUB:
-                    return builder.CreateSub(left, right, "sub");
-                case BinaryOpType::MUL:
-                    return builder.CreateMul(left, right, "mul");
-                case BinaryOpType::DIV:
-                    return builder.CreateSDiv(left, right, "div");
-                case BinaryOpType::MOD:
-                    return builder.CreateSRem(left, right, "mod");
+                case BinaryOpType::ADD: return builder.CreateAdd(left, right, "add");
+                case BinaryOpType::SUB: return builder.CreateSub(left, right, "sub");
+                case BinaryOpType::MUL: return builder.CreateMul(left, right, "mul");
+                case BinaryOpType::DIV: return builder.CreateSDiv(left, right, "div");
+                case BinaryOpType::MOD: return builder.CreateSRem(left, right, "mod");
+                case BinaryOpType::BITAND: return builder.CreateAnd(left, right, "and");
+                case BinaryOpType::BITOR: return builder.CreateOr(left, right, "or");
+                case BinaryOpType::BITXOR: return builder.CreateXor(left, right, "xor");
+                case BinaryOpType::SHL: return builder.CreateShl(left, right, "shl");
+                case BinaryOpType::SHR: return builder.CreateAShr(left, right, "shr");
             }
             break;
         }
 
         case ASTNodeType::UNARY_OP: {
+            // 取地址 &a —— AddressOfNode 复用 UNARY_OP 类型
+            if (auto* addr = dynamic_cast<AddressOfNode*>(node)) {
+                if (addr->operand->type == ASTNodeType::VARIABLE_REF) {
+                    auto* ref = static_cast<VariableRefNode*>(addr->operand.get());
+                    auto it = namedValues.find(ref->name);
+                    if (it != namedValues.end()) {
+                        return it->second.ptr;
+                    }
+                }
+                std::cerr << "Error: address-of requires a variable" << std::endl;
+                return nullptr;
+            }
+
             auto* unary = static_cast<UnaryOpNode*>(node);
             auto* operand = generateExpression(unary->operand.get());
 
@@ -140,10 +173,32 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                 case UnaryOpType::NEG:
                     return builder.CreateNeg(operand, "neg");
                 case UnaryOpType::NOT:
-                    return builder.CreateICmpEQ(operand,
-                        llvm::ConstantInt::get(context, llvm::APInt(1, 0)), "not");
-                default:
+                    return builder.CreateNot(operand, "not");
+                case UnaryOpType::INC:
+                case UnaryOpType::DEC: {
+                    // 自增/自减: 需要作用在变量上
+                    if (unary->operand->type == ASTNodeType::VARIABLE_REF) {
+                        auto* ref = static_cast<VariableRefNode*>(unary->operand.get());
+                        auto it = namedValues.find(ref->name);
+                        if (it != namedValues.end()) {
+                            llvm::Value* cur = builder.CreateLoad(it->second.type, it->second.ptr, ref->name);
+                            llvm::Value* one = llvm::ConstantInt::get(it->second.type, 1, true);
+                            llvm::Value* updated = (unary->op == UnaryOpType::INC)
+                                ? builder.CreateAdd(cur, one, "inc")
+                                : builder.CreateSub(cur, one, "dec");
+                            builder.CreateStore(updated, it->second.ptr);
+                            return updated;
+                        }
+                    }
                     break;
+                }
+                case UnaryOpType::DEREF: {
+                    // 解引用 *p
+                    if (operand) {
+                        return builder.CreateLoad(llvm::Type::getInt32Ty(context), operand, "deref");
+                    }
+                    break;
+                }
             }
             break;
         }
@@ -171,16 +226,53 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             auto* right = generateExpression(logic->right.get());
 
             switch (logic->op) {
-                case LogicalOpType::AND:
-                    return builder.CreateAnd(left, right, "and");
-                case LogicalOpType::OR:
-                    return builder.CreateOr(left, right, "or");
+                case LogicalOpType::AND: return builder.CreateAnd(left, right, "and");
+                case LogicalOpType::OR: return builder.CreateOr(left, right, "or");
             }
             break;
         }
 
+        case ASTNodeType::CAST: {
+            auto* cast = static_cast<CastNode*>(node);
+            llvm::Value* val = generateExpression(cast->value.get());
+            if (!val) return nullptr;
+            // 简单类型转换：按目标类型名处理
+            llvm::Type* targetType = getLLVMType(cast->targetType);
+            if (targetType->isIntegerTy() && val->getType()->isIntegerTy()) {
+                return builder.CreateIntCast(val, targetType, true, "cast");
+            }
+            if (targetType->isDoubleTy()) {
+                if (val->getType()->isIntegerTy())
+                    return builder.CreateSIToFP(val, targetType, "cast");
+            }
+            if (val->getType()->isDoubleTy() && targetType->isIntegerTy()) {
+                return builder.CreateFPToSI(val, targetType, "cast");
+            }
+            return val;
+        }
+
+        case ASTNodeType::BLOCK_STMT: {
+            // 数组/结构体初始化 {1,2,3} —— 简化：取最后一个元素
+            auto* block = static_cast<BlockStmtNode*>(node);
+            llvm::Value* last = nullptr;
+            for (auto& stmt : block->statements) {
+                last = generateExpression(stmt.get());
+            }
+            if (last) return last;
+            return llvm::ConstantInt::get(context, llvm::APInt(32, 0));
+        }
+
         case ASTNodeType::FUNCTION_CALL: {
             auto* call = static_cast<FunctionCallNode*>(node);
+            // 成员方法调用 obj.method() —— 结构体方法暂不完整实现
+            if (call->name.find('.') != std::string::npos) {
+                // 生成参数表达式但不调用
+                for (auto& arg : call->arguments) {
+                    generateExpression(arg.get());
+                }
+                return llvm::ConstantFP::get(context, llvm::APFloat(0.0));
+            }
+
             llvm::Function* func = module->getFunction(call->name);
             if (!func) {
                 std::cerr << "Error: Function '" << call->name << "' not found" << std::endl;
@@ -222,7 +314,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             }
 
             llvm::AllocaInst* alloca = builder.CreateAlloca(varType, nullptr, decl->name);
-            namedValues[decl->name] = alloca;
+            namedValues[decl->name] = VarInfo{alloca, varType};
 
             if (decl->initializer) {
                 llvm::Value* initVal = generateExpression(decl->initializer.get());
@@ -236,11 +328,20 @@ void CodeGenerator::generateStatement(ASTNode* node)
         case ASTNodeType::ASSIGNMENT_STMT: {
             auto* assign = static_cast<AssignmentNode*>(node);
             llvm::Value* varPtr = nullptr;
+            llvm::Type* varType = llvm::Type::getInt32Ty(context);
             if (assign->target->type == ASTNodeType::VARIABLE_REF) {
                 auto* ref = static_cast<VariableRefNode*>(assign->target.get());
                 auto it = namedValues.find(ref->name);
                 if (it != namedValues.end()) {
-                    varPtr = it->second;
+                    varPtr = it->second.ptr;
+                    varType = it->second.type;
+                }
+            } else if (assign->target->type == ASTNodeType::UNARY_OP) {
+                // 解引用赋值 *p = v
+                auto* unary = static_cast<UnaryOpNode*>(assign->target.get());
+                if (unary->op == UnaryOpType::DEREF) {
+                    varPtr = generateExpression(unary->operand.get());
+                    varType = llvm::Type::getInt32Ty(context);
                 }
             }
 
@@ -372,26 +473,78 @@ void CodeGenerator::generateStatement(ASTNode* node)
     }
 }
 
+void CodeGenerator::generateFunction(FunctionDeclNode* fn)
+{
+    if (!fn || !fn->body) return;
+
+    llvm::Type* retType = llvm::Type::getInt32Ty(context);
+    if (fn->returnType) {
+        retType = getLLVMType(fn->returnType.get());
+    }
+
+    std::vector<llvm::Type*> paramTypes;
+    for (auto& param : fn->params) {
+        paramTypes.push_back(getLLVMType(param->type.get()));
+    }
+
+    llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+    llvm::Function* func = llvm::Function::Create(
+        funcType, llvm::Function::ExternalLinkage, fn->name, module.get());
+    currentFunction = func;
+
+    llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(context, "entry", func);
+    builder.SetInsertPoint(entryBB);
+
+    // 参数绑定
+    size_t idx = 0;
+    for (auto& arg : func->args()) {
+        if (idx < fn->params.size()) {
+            auto* param = fn->params[idx].get();
+            llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, param->name);
+            builder.CreateStore(&arg, alloca);
+            namedValues[param->name] = VarInfo{alloca, arg.getType()};
+        }
+        ++idx;
+    }
+
+    generateStatement(fn->body.get());
+
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        if (retType->isVoidTy()) {
+            builder.CreateRetVoid();
+        } else {
+            builder.CreateRet(llvm::ConstantInt::get(retType, 0));
+        }
+    }
+}
+
 void CodeGenerator::generate(ProgramNode* root)
 {
     if (!root) return;
 
+    // 先收集所有函数定义（不含 main，main 单独处理保证入口）
+    for (auto& decl : root->decls)
+    {
+        if (decl->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+            if (fn->name != "main")
+            {
+                generateFunction(fn);
+            }
+        }
+    }
+
+    // main 函数作为入口，返回 int
     llvm::FunctionType* mainType = llvm::FunctionType::get(
-        llvm::Type::getInt32Ty(context),
-        false
-    );
+        llvm::Type::getInt32Ty(context), false);
     llvm::Function* mainFunc = llvm::Function::Create(
-        mainType,
-        llvm::Function::ExternalLinkage,
-        "main",
-        module.get()
-    );
+        mainType, llvm::Function::ExternalLinkage, "main", module.get());
     currentFunction = mainFunc;
 
     llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(context, "entry", mainFunc);
     builder.SetInsertPoint(entryBB);
 
-    // 找到 main 函数并生成其函数体
     for (auto& decl : root->decls)
     {
         if (decl->type == ASTNodeType::FUNCTION_DECL)

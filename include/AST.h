@@ -85,7 +85,12 @@ enum class BinaryOpType
     SUB, // -
     MUL, // *
     DIV, // /
-    MOD // %
+    MOD, // %
+    BITAND,  // &
+    BITOR,   // |
+    BITXOR,  // ^
+    SHL,     // <<
+    SHR      // >>
 };
 
 enum class UnaryOpType

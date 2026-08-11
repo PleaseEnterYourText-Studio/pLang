@@ -684,6 +684,11 @@ std::unique_ptr<ASTNode> Parser::parseAssignment()
                 case TokenType::STAR_ASSIGN: binOp = BinaryOpType::MUL; break;
                 case TokenType::SLASH_ASSIGN: binOp = BinaryOpType::DIV; break;
                 case TokenType::PERCENT_ASSIGN: binOp = BinaryOpType::MOD; break;
+                case TokenType::AMP_ASSIGN: binOp = BinaryOpType::BITAND; break;
+                case TokenType::PIPE_ASSIGN: binOp = BinaryOpType::BITOR; break;
+                case TokenType::CARET_ASSIGN: binOp = BinaryOpType::BITXOR; break;
+                case TokenType::SHL_ASSIGN: binOp = BinaryOpType::SHL; break;
+                case TokenType::SHR_ASSIGN: binOp = BinaryOpType::SHR; break;
                 default: binOp = BinaryOpType::ADD; break;
             }
 
@@ -728,8 +733,7 @@ std::unique_ptr<ASTNode> Parser::parseBitwiseOr()
     while (match(TokenType::PIPE))
     {
         auto right = parseBitwiseXor();
-        expr = std::make_unique<BinaryOpNode>(BinaryOpType::ADD, std::move(expr), std::move(right));
-        // 简化：位或暂存为 BINARY_OP（后续细化）
+        expr = std::make_unique<BinaryOpNode>(BinaryOpType::BITOR, std::move(expr), std::move(right));
     }
     return expr;
 }
@@ -740,7 +744,7 @@ std::unique_ptr<ASTNode> Parser::parseBitwiseXor()
     while (match(TokenType::CARET))
     {
         auto right = parseBitwiseAnd();
-        expr = std::make_unique<BinaryOpNode>(BinaryOpType::ADD, std::move(expr), std::move(right));
+        expr = std::make_unique<BinaryOpNode>(BinaryOpType::BITXOR, std::move(expr), std::move(right));
     }
     return expr;
 }
@@ -751,7 +755,7 @@ std::unique_ptr<ASTNode> Parser::parseBitwiseAnd()
     while (match(TokenType::AMP))
     {
         auto right = parseEquality();
-        expr = std::make_unique<BinaryOpNode>(BinaryOpType::ADD, std::move(expr), std::move(right));
+        expr = std::make_unique<BinaryOpNode>(BinaryOpType::BITAND, std::move(expr), std::move(right));
     }
     return expr;
 }
@@ -814,12 +818,12 @@ std::unique_ptr<ASTNode> Parser::parseShift()
         if (match(TokenType::SHL))
         {
             auto right = parseAdditive();
-            expr = std::make_unique<BinaryOpNode>(BinaryOpType::ADD, std::move(expr), std::move(right));
+            expr = std::make_unique<BinaryOpNode>(BinaryOpType::SHL, std::move(expr), std::move(right));
         }
         else if (match(TokenType::SHR))
         {
             auto right = parseAdditive();
-            expr = std::make_unique<BinaryOpNode>(BinaryOpType::ADD, std::move(expr), std::move(right));
+            expr = std::make_unique<BinaryOpNode>(BinaryOpType::SHR, std::move(expr), std::move(right));
         }
         else break;
     }
