@@ -27,7 +27,6 @@ std::string getLine(const std::string& source, int line)
     return lineText;
 }
 
-// gcc 风格错误输出: file:line:col: error: message\n  行号 源码行\n       ^
 void printError(const std::string& filename, const std::string& source,
                 int line, int column, const std::string& message)
 {
@@ -42,7 +41,6 @@ void printError(const std::string& filename, const std::string& source,
     }
 }
 
-// gcc 风格警告输出
 void printWarning(const std::string& filename, const std::string& source,
                   int line, int column, const std::string& message)
 {

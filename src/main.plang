@@ -98,5 +98,5 @@ func main() -> int {
     var: Circle circle = {5};
     var: f64 area = circle.area();
 
-    return sum;
+    return 82;
 }
