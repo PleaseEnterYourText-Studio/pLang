@@ -42,9 +42,16 @@ enum class ASTNodeType
     LOGICAL_OP,
     CONDITIONAL_EXPR,
     CAST,
+    CAST_EXPR,
     THIS_REF,
     TYPE_PARAM,
     TEMPLATE_DECL,
+    DO_WHILE_STMT,
+    MEMBER_ACCESS,
+    ADDRESS_OF,
+    DEREF,
+    STRUCT_INIT,
+    SIZEOF_EXPR,
 
     // 类型
     TYPE_PRIMITIVE,
@@ -513,7 +520,16 @@ struct CastExprNode : ASTNode
     std::unique_ptr<TypeNode> targetType;
 
     CastExprNode(std::unique_ptr<ASTNode> expr, std::unique_ptr<TypeNode> targetType, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::CAST, line, column), expr(std::move(expr)), targetType(std::move(targetType)) {}
+        : ASTNode(ASTNodeType::CAST_EXPR, line, column), expr(std::move(expr)), targetType(std::move(targetType)) {}
+};
+
+// ===== sizeof 表达式 =====
+struct SizeofExprNode : ASTNode
+{
+    std::unique_ptr<TypeNode> targetType;
+
+    explicit SizeofExprNode(std::unique_ptr<TypeNode> targetType, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::SIZEOF_EXPR, line, column), targetType(std::move(targetType)) {}
 };
 
 #endif
