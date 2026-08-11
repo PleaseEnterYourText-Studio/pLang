@@ -162,7 +162,7 @@ int main (int argc, char* argv[]) {
 	if (argc < 2) {
 		std::cerr << "usage: plangc [options] <file.plang | directory>\n";
 		std::cerr << "options:\n";
-		std::cerr << "  -k    keep intermediate files (.ll, .o)\n";
+		std::cerr << "  --save-temps    keep intermediate files (.ll, .o)\n";
 		return 1;
 	}
 
@@ -171,7 +171,7 @@ int main (int argc, char* argv[]) {
 
 	for (int i = 1; i < argc; ++i) {
 		std::string arg = argv[i];
-		if (arg == "-k") {
+		if (arg == "--save-temps") {
 			keepIntermediate = true;
 		} else if (!arg.empty () && arg[0] == '-' && arg != ".") {
 			std::cerr << "unknown option: " << arg << "\n";
