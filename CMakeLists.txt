@@ -89,6 +89,8 @@ add_executable(PLang
     src/Lexer.cpp
     src/AST.cpp
     src/Parser.cpp
+        include/CodeGenerator.h
+        src/CodeGenerator.cpp
 )
 
 target_include_directories(PLang PRIVATE

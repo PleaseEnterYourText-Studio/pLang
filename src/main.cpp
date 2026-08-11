@@ -6,6 +6,7 @@
 #include "Parser.h"
 #include "AST.h"
 #include "token.h"
+#include "CodeGenerator.h"
 
 void printAST(const ASTNode* node, int depth = 0)
 {
@@ -241,6 +242,12 @@ int main() {
         "    return a;\n"
         "}\n";
 
+    std::cout << "========================================\n";
+    std::cout << "  PLang Compiler\n";
+    std::cout << "========================================\n\n";
+
+    std::cout << "Source code:\n" << source << "\n\n";
+
     Lexer lexer(source);
     auto tokens = lexer.scanTokens();
     for (const auto& tok : tokens) {
@@ -250,15 +257,45 @@ int main() {
         }
     }
 
+    std::cout << "Tokens (" << tokens.size() << "):\n";
+    for (const auto& tok : tokens) {
+        if (tok.type != TokenType::EOF_TOKEN) {
+            std::cout << "  " << tok.toString() << "\n";
+        }
+    }
+    std::cout << "\n";
+
     Parser parser(tokens);
+    std::unique_ptr<ProgramNode> program;
     try {
-        auto program = parser.parse();
+        program = parser.parse();
+        std::cout << "AST:\n";
         printAST(program.get());
         printChildren(program.get());
+        std::cout << "\n";
     } catch (const std::exception& e) {
         std::cerr << "parse error: " << e.what() << "\n";
         return 1;
     }
-    std::cout << "parsing passed\n";
+    std::cout << "Parsing passed\n\n";
+
+    // ===== 代码生成test =====
+    std::cout << "Generating LLVM IR...\n";
+    CodeGenerator generator;
+    generator.generate(program.get());
+
+    if (!generator.verify()) {
+        std::cerr << "IR verification failed!" << std::endl;
+        return 1;
+    }
+
+    std::cout << "Generated LLVM IR:\n";
+    std::cout << "========================================\n";
+    generator.printIR();
+    std::cout << "========================================\n";
+
+    generator.saveToFile("output.ll");
+    std::cout << "IR saved to output.ll\n";
+
     return 0;
 }
