@@ -8,6 +8,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/IR/InlineAsm.h"
 
 CodeGenerator::CodeGenerator()
     : builder(context), currentFunction(nullptr)
@@ -379,6 +380,78 @@ void CodeGenerator::generateStatement(ASTNode* node)
             auto* block = static_cast<BlockStmtNode*>(node);
             for (auto& stmt : block->statements) {
                 generateStatement(stmt.get());
+            }
+            break;
+        }
+
+        case ASTNodeType::ASM_STMT: {
+            auto* asmNode = static_cast<AsmNode*>(node);
+
+            // 组装 LLVM inline asm
+            std::string constraints;
+            // 输出约束
+            for (size_t i = 0; i < asmNode->outputs.size(); ++i) {
+                if (i > 0) constraints += ",";
+                constraints += asmNode->outputs[i].constraint;
+            }
+            // 输入约束
+            for (size_t i = 0; i < asmNode->inputs.size(); ++i) {
+                if (!constraints.empty()) constraints += ",";
+                constraints += asmNode->inputs[i].constraint;
+            }
+            // clobber
+            for (size_t i = 0; i < asmNode->clobbers.size(); ++i) {
+                if (!constraints.empty()) constraints += ",";
+                constraints += "~{" + asmNode->clobbers[i] + "}";
+            }
+
+            // 操作数值：只有输入操作数需要传参数
+            std::vector<llvm::Value*> args;
+            std::vector<llvm::Type*> argTypes;
+            for (auto& in : asmNode->inputs) {
+                auto it = namedValues.find(in.name);
+                llvm::Type* t = llvm::Type::getInt32Ty(context);
+                if (it != namedValues.end()) {
+                    t = it->second.type;
+                    args.push_back(builder.CreateLoad(it->second.type, it->second.ptr, in.name));
+                } else {
+                    args.push_back(llvm::ConstantInt::get(context, llvm::APInt(32, 0)));
+                }
+                argTypes.push_back(t);
+            }
+
+            // 返回类型：有输出时返回输出类型，无输出则 void
+            llvm::Type* retType = llvm::Type::getVoidTy(context);
+            if (!asmNode->outputs.empty()) {
+                if (asmNode->outputs.size() == 1) {
+                    auto it = namedValues.find(asmNode->outputs[0].name);
+                    retType = (it != namedValues.end()) ? it->second.type : llvm::Type::getInt32Ty(context);
+                } else {
+                    std::vector<llvm::Type*> outTypes;
+                    for (auto& out : asmNode->outputs) {
+                        auto it = namedValues.find(out.name);
+                        outTypes.push_back((it != namedValues.end()) ? it->second.type
+                                                                     : llvm::Type::getInt32Ty(context));
+                    }
+                    retType = llvm::StructType::get(context, outTypes);
+                }
+            }
+            llvm::FunctionType* ft = llvm::FunctionType::get(retType, argTypes, false);
+            auto* asmCall = llvm::InlineAsm::get(ft, asmNode->template_str, constraints, true);
+            auto* callResult = builder.CreateCall(asmCall, args, "asm");
+
+            // 输出操作数写回变量（从返回值提取）
+            size_t outIdx = 0;
+            for (auto& out : asmNode->outputs) {
+                auto it = namedValues.find(out.name);
+                if (it != namedValues.end() && callResult) {
+                    llvm::Value* val = callResult;
+                    if (asmNode->outputs.size() > 1) {
+                        val = builder.CreateExtractValue(callResult, outIdx, "asm_out");
+                    }
+                    builder.CreateStore(val, it->second.ptr);
+                }
+                ++outIdx;
             }
             break;
         }

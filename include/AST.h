@@ -52,6 +52,7 @@ enum class ASTNodeType
     DEREF,
     STRUCT_INIT,
     SIZEOF_EXPR,
+    ASM_STMT,
 
     // 类型
     TYPE_PRIMITIVE,
@@ -535,6 +536,24 @@ struct SizeofExprNode : ASTNode
 
     explicit SizeofExprNode(std::unique_ptr<TypeNode> targetType, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::SIZEOF_EXPR, line, column), targetType(std::move(targetType)) {}
+};
+
+// ===== 内联汇编 asm{} =====
+struct AsmOperand
+{
+    std::string constraint;    // 如 "r", "=r"
+    std::string name;          // 绑定的变量/表达式
+};
+
+struct AsmNode : ASTNode
+{
+    std::string template_str;  // AT&T 汇编模板
+    std::vector<AsmOperand> outputs;   // 输出操作数
+    std::vector<AsmOperand> inputs;    // 输入操作数
+    std::vector<std::string> clobbers; // 破坏列表
+
+    AsmNode(const std::string& templateStr, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::ASM_STMT, line, column), template_str(templateStr) {}
 };
 
 #endif

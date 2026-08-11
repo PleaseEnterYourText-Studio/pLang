@@ -53,6 +53,7 @@ private:
     // 语句
     std::unique_ptr<ASTNode> parseStatement();
     std::unique_ptr<ASTNode> parseBlock();
+    std::unique_ptr<ASTNode> parseAsm();
     std::unique_ptr<ASTNode> parseVarDecl();
     std::unique_ptr<ASTNode> parseIf();
     std::unique_ptr<ASTNode> parseWhile();

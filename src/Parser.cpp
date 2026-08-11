@@ -440,6 +440,7 @@ std::unique_ptr<ASTNode> Parser::parseStatement()
     if (check(TokenType::FOR)) return parseFor();
     if (check(TokenType::DO)) return parseDoWhile();
     if (check(TokenType::RETURN)) return parseReturn();
+    if (check(TokenType::ASM)) return parseAsm();
     if (check(TokenType::LBRACE)) return parseBlock();
     if (check(TokenType::SEMICOLON)) { advance(); return nullptr; }
     return parseExprStmt();
@@ -456,6 +457,66 @@ std::unique_ptr<ASTNode> Parser::parseBlock()
     }
     expect(TokenType::RBRACE, "expected }");
     return block;
+}
+
+std::unique_ptr<ASTNode> Parser::parseAsm()
+{
+    Token start = expect(TokenType::ASM, "expected asm");
+    expect(TokenType::LBRACE, "expected { after asm");
+
+    auto asmNode = std::make_unique<AsmNode>("", start.line, start.column);
+
+    // 模板字符串
+    Token tmpl = expect(TokenType::STRING, "expected asm template string");
+    asmNode->template_str = tmpl.text;
+
+    // 输出操作数 : "=r"(name), ...
+    if (match(TokenType::COLON))
+    {
+        if (!check(TokenType::COLON) && !check(TokenType::RBRACE))
+        {
+            do
+            {
+                Token constraint = expect(TokenType::STRING, "expected constraint string");
+                expect(TokenType::LPAREN, "expected ( after constraint");
+                Token name = expect(TokenType::IDENT, "expected operand name");
+                expect(TokenType::RPAREN, "expected )");
+                asmNode->outputs.push_back({constraint.text, name.text});
+            } while (match(TokenType::COMMA));
+        }
+
+        // 输入操作数 : "r"(name), ...
+        if (match(TokenType::COLON))
+        {
+            if (!check(TokenType::COLON) && !check(TokenType::RBRACE))
+            {
+                do
+                {
+                    Token constraint = expect(TokenType::STRING, "expected constraint string");
+                    expect(TokenType::LPAREN, "expected ( after constraint");
+                    Token name = expect(TokenType::IDENT, "expected operand name");
+                    expect(TokenType::RPAREN, "expected )");
+                    asmNode->inputs.push_back({constraint.text, name.text});
+                } while (match(TokenType::COMMA));
+            }
+
+            // clobber 列表 : "cc", ...
+            if (match(TokenType::COLON))
+            {
+                if (!check(TokenType::RBRACE))
+                {
+                    do
+                    {
+                        Token clob = expect(TokenType::STRING, "expected clobber string");
+                        asmNode->clobbers.push_back(clob.text);
+                    } while (match(TokenType::COMMA));
+                }
+            }
+        }
+    }
+
+    expect(TokenType::RBRACE, "expected } to close asm");
+    return asmNode;
 }
 
 std::unique_ptr<ASTNode> Parser::parseVarDecl()
