@@ -5,12 +5,15 @@
 #include <vector>
 #include <memory>
 #include <cstdlib>
+#include <filesystem>
 #include "Lexer.h"
 #include "Parser.h"
 #include "Sema.h"
 #include "CodeGenerator.h"
 #include "AST.h"
 #include "token.h"
+
+namespace fs = std::filesystem;
 
 // 从源码中提取第 line 行的内容
 std::string getLine (const std::string& source, int line) {
@@ -48,17 +51,18 @@ void printWarning (const std::string& filename, const std::string& source, int l
 	}
 }
 
-int main (int argc, char* argv[]) {
-	if (argc < 2) {
-		std::cerr << "usage: PLang <source.plang>\n";
-		return 1;
-	}
+// 替换扩展名为新后缀: "dir/foo.plang" + ".o" -> "dir/foo.o"
+std::string withExtension (const std::string& path, const std::string& newExt) {
+	fs::path p (path);
+	return p.replace_extension (newExt).string ();
+}
 
-	std::string filename = argv[1];
+// 编译单个 .plang 文件，产物为同名 .o 和可执行文件
+bool compileFile (const std::string& filename) {
 	std::ifstream file (filename);
 	if (!file.is_open ()) {
 		std::cerr << filename << ": error: cannot open file\n";
-		return 1;
+		return false;
 	}
 
 	std::stringstream buffer;
@@ -76,7 +80,7 @@ int main (int argc, char* argv[]) {
 		}
 	}
 	if (lexErrors > 0)
-		return 1;
+		return false;
 
 	// 语法分析
 	Parser parser (tokens);
@@ -84,9 +88,8 @@ int main (int argc, char* argv[]) {
 	try {
 		program = parser.parse ();
 	} catch (const std::exception& e) {
-		// Parser 的异常信息不含行列，需要从最近的错误位置补
 		printError (filename, source, parser.getErrorLine (), parser.getErrorColumn (), e.what ());
-		return 1;
+		return false;
 	}
 
 	// 语义分析
@@ -99,47 +102,79 @@ int main (int argc, char* argv[]) {
 		for (const auto& err : sema.getErrors ()) {
 			printError (filename, source, err.line, err.column, err.message);
 		}
-		return 1;
+		return false;
 	}
 
-	std::cout << "analysis passed\n";
-
 	// LLVM IR 代码生成
-	std::cout << "Generating LLVM IR...\n";
 	CodeGenerator generator;
 	generator.generate (program.get ());
 
 	if (!generator.verify ()) {
-		std::cerr << "IR verification failed!\n";
-		return 1;
+		std::cerr << filename << ": error: IR verification failed\n";
+		return false;
 	}
 
-	std::cout << "Generated LLVM IR:\n";
-	generator.printIR ();
-	std::cout << "\n";
+	std::string stem = withExtension (filename, "");
+	std::string objPath = withExtension (filename, ".o");
+	std::string exePath = withExtension (filename, "");
+	std::string llPath = withExtension (filename, ".ll");
 
-	generator.saveToFile ("output.ll");
-	std::cout << "IR saved to output.ll\n";
+	generator.saveToFile (llPath);
 
-	if (!generator.emitObject ("output.o")) {
-		std::cerr << "object generation failed\n";
-		return 1;
+	if (!generator.emitObject (objPath)) {
+		std::cerr << filename << ": error: object generation failed\n";
+		return false;
 	}
-	std::cout << "object saved to output.o\n";
 
+	// 链接（平台相关）
+	int linkResult;
 #if defined(__APPLE__)
-	int linkResult = std::system ("ld -o output output.o -lSystem -syslibroot $(xcrun --show-sdk-path) -e _main "
-	                              "2>/dev/null || cc output.o -o output");
+	linkResult = std::system (("ld -o " + exePath + " " + objPath +
+	                          " -lSystem -syslibroot $(xcrun --show-sdk-path) -e _main").c_str ());
 #elif defined(__linux__)
-	int linkResult = std::system ("ld -o output output.o");
+	linkResult = std::system (("ld -o " + exePath + " " + objPath).c_str ());
 #else
-	int linkResult = 1;
+	linkResult = 1;
 #endif
 	if (linkResult != 0) {
-		std::cerr << "link failed\n";
+		std::cerr << filename << ": error: link failed\n";
+		return false;
+	}
+
+	return true;
+}
+
+int main (int argc, char* argv[]) {
+	if (argc < 2) {
+		std::cerr << "usage: plangc <file.plang | directory>\n";
 		return 1;
 	}
-	std::cout << "executable saved to output\n";
 
-	return 0;
+	std::string target = argv[1];
+
+	// plangc . —— 编译目录下所有 .plang
+	if (target == "." || fs::is_directory (target)) {
+		std::vector<std::string> files;
+		for (const auto& entry : fs::directory_iterator (target)) {
+			if (entry.path ().extension () == ".plang") {
+				files.push_back (entry.path ().string ());
+			}
+		}
+		if (files.empty ()) {
+			std::cerr << "no .plang files found in " << target << "\n";
+			return 1;
+		}
+		int failed = 0;
+		for (const auto& f : files) {
+			std::cout << "compiling " << f << "\n";
+			if (!compileFile (f)) {
+				failed++;
+			}
+		}
+		std::cout << "done: " << (files.size () - failed) << " succeeded, " << failed << " failed\n";
+		return failed == 0 ? 0 : 1;
+	}
+
+	// plangc file.plang —— 编译单个文件
+	return compileFile (target) ? 0 : 1;
 }
