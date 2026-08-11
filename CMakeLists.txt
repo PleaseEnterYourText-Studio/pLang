@@ -103,20 +103,24 @@ target_include_directories(PLang PRIVATE
     ${LLVM_INCLUDE_DIRS}
 )
 
-llvm_map_components_to_libnames(llvm_libs 
-    support 
-    core 
-    irreader 
-    bitwriter 
-    passes 
-    analysis
-    mc
-    codegen
-    target
-    native
-    asmprinter
-    option
-)
+if(LLVM_LINK_LLVM_DYLIB)
+    set(llvm_libs LLVM)
+else()
+    llvm_map_components_to_libnames(llvm_libs 
+        support 
+        core 
+        irreader 
+        bitwriter 
+        passes 
+        analysis
+        mc
+        codegen
+        target
+        native
+        asmprinter
+        option
+    )
+endif()
 
 target_link_libraries(PLang PRIVATE ${llvm_libs})
 
