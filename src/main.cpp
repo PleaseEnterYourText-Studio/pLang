@@ -134,9 +134,8 @@ int main(int argc, char* argv[])
     }
 
     std::cout << "Generated LLVM IR:\n";
-    std::cout << "========================================\n";
     generator.printIR();
-    std::cout << "========================================\n";
+    std::cout << "\n";
 
     generator.saveToFile("output.ll");
     std::cout << "IR saved to output.ll\n";
