@@ -127,12 +127,13 @@ int main (int argc, char* argv[]) {
 	}
 	std::cout << "object saved to output.o\n";
 
-#ifdef __APPLE
+#if defined(__APPLE__)
 	int linkResult = std::system ("ld -o output output.o -lSystem -syslibroot $(xcrun --show-sdk-path) -e _main "
 	                              "2>/dev/null || cc output.o -o output");
-#endif
-#ifdef __linux__
+#elif defined(__linux__)
 	int linkResult = std::system ("ld -o output output.o");
+#else
+	int linkResult = 1;
 #endif
 	if (linkResult != 0) {
 		std::cerr << "link failed\n";
