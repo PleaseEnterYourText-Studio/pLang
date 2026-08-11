@@ -51,6 +51,7 @@ public:
     void printIR();
     void saveToFile(const std::string& filename);
     bool verify();
+    bool emitObject(const std::string& filename);
 };
 
 #endif

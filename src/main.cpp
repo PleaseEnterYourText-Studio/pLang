@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <cstdlib>
 #include "Lexer.h"
 #include "Parser.h"
 #include "Sema.h"
@@ -139,6 +140,21 @@ int main(int argc, char* argv[])
 
     generator.saveToFile("output.ll");
     std::cout << "IR saved to output.ll\n";
+
+    if (!generator.emitObject("output.o"))
+    {
+        std::cerr << "object generation failed\n";
+        return 1;
+    }
+    std::cout << "object saved to output.o\n";
+
+    int linkResult = std::system("ld -o output output.o -lSystem -syslibroot $(xcrun --show-sdk-path) -e _main 2>/dev/null || cc output.o -o output");
+    if (linkResult != 0)
+    {
+        std::cerr << "link failed\n";
+        return 1;
+    }
+    std::cout << "executable saved to output\n";
 
     return 0;
 }

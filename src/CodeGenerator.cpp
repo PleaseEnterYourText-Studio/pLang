@@ -1,5 +1,13 @@
 #include "../include/CodeGenerator.h"
 #include <iostream>
+#include "llvm/TargetParser/Host.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/TargetParser/Triple.h"
 
 CodeGenerator::CodeGenerator()
     : builder(context), currentFunction(nullptr)
@@ -586,5 +594,49 @@ bool CodeGenerator::verify()
         std::cerr << "Verification failed:\n" << error << std::endl;
         return false;
     }
+    return true;
+}
+
+bool CodeGenerator::emitObject(const std::string& filename)
+{
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
+
+    auto targetTriple = llvm::sys::getDefaultTargetTriple();
+    llvm::Triple triple(targetTriple);
+    module->setTargetTriple(triple);
+
+    std::string error;
+    auto target = llvm::TargetRegistry::lookupTarget(triple, error);
+    if (!target) {
+        std::cerr << "target error: " << error << std::endl;
+        return false;
+    }
+
+    auto cpu = "generic";
+    auto features = "";
+    llvm::TargetOptions opt;
+    auto relocModel = llvm::Reloc::PIC_;
+    auto targetMachine = target->createTargetMachine(
+        triple, cpu, features, opt, relocModel);
+
+    module->setDataLayout(targetMachine->createDataLayout());
+
+    std::error_code ec;
+    llvm::raw_fd_ostream dest(filename, ec, llvm::sys::fs::OF_None);
+    if (ec) {
+        std::cerr << "cannot open " << filename << ": " << ec.message() << std::endl;
+        return false;
+    }
+
+    llvm::legacy::PassManager pass;
+    auto fileType = llvm::CodeGenFileType::ObjectFile;
+    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
+        std::cerr << "target machine cannot emit file" << std::endl;
+        return false;
+    }
+    pass.run(*module);
+    dest.flush();
     return true;
 }

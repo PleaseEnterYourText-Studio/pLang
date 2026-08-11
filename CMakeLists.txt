@@ -110,6 +110,12 @@ llvm_map_components_to_libnames(llvm_libs
     bitwriter 
     passes 
     analysis
+    mc
+    codegen
+    target
+    native
+    asmprinter
+    option
 )
 
 target_link_libraries(PLang PRIVATE ${llvm_libs})
