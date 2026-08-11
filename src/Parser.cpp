@@ -96,9 +96,19 @@ bool Parser::matchAny(const std::vector<TokenType>& types)
 Token Parser::expect(TokenType type, const std::string& message)
 {
     if (check(type)) return advance();
+
+    // 若上一 token 与当前 token 不在同一行，错误定位到上一 token 末尾
+    // （通常表示上一语句末尾缺少分号）
+    if (pos > 0 && previous().line != peek().line)
+    {
+        errorLine = previous().line;
+        errorColumn = previous().column + (int)previous().text.size();
+        throw std::runtime_error(message + " but found end of line");
+    }
+
     errorLine = peek().line;
     errorColumn = peek().column;
-    throw std::runtime_error("expected " + message + " but got '" + peek().text + "'");
+    throw std::runtime_error(message + " but got '" + peek().text + "'");
 }
 
 std::unique_ptr<TypeNode> Parser::parseType()
