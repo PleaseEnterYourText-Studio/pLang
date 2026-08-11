@@ -88,12 +88,14 @@ add_executable(PLang
     include/Parser.h
     include/Sema.h
     include/SymbolTable.h
+    include/CodeGenerator.h
     include/token.h
     src/Lexer.cpp
     src/AST.cpp
     src/Parser.cpp
     src/Sema.cpp
     src/SymbolTable.cpp
+    src/CodeGenerator.cpp
 )
 
 target_include_directories(PLang PRIVATE

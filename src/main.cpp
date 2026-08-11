@@ -7,6 +7,7 @@
 #include "Lexer.h"
 #include "Parser.h"
 #include "Sema.h"
+#include "CodeGenerator.h"
 #include "AST.h"
 #include "token.h"
 
@@ -120,5 +121,25 @@ int main(int argc, char* argv[])
     }
 
     std::cout << "analysis passed\n";
+
+    // LLVM IR 代码生成
+    std::cout << "Generating LLVM IR...\n";
+    CodeGenerator generator;
+    generator.generate(program.get());
+
+    if (!generator.verify())
+    {
+        std::cerr << "IR verification failed!\n";
+        return 1;
+    }
+
+    std::cout << "Generated LLVM IR:\n";
+    std::cout << "========================================\n";
+    generator.printIR();
+    std::cout << "========================================\n";
+
+    generator.saveToFile("output.ll");
+    std::cout << "IR saved to output.ll\n";
+
     return 0;
 }
