@@ -57,8 +57,9 @@ std::string withExtension (const std::string& path, const std::string& newExt) {
 	return p.replace_extension (newExt).string ();
 }
 
-// 编译单个 .plang 文件，产物为同名 .o 和可执行文件
-bool compileFile (const std::string& filename) {
+// 编译单个 .plang 文件，产物为同名可执行文件
+// keepIntermediate 为 true 时保留 .ll/.o 中间产物
+bool compileFile (const std::string& filename, bool keepIntermediate) {
 	std::ifstream file (filename);
 	if (!file.is_open ()) {
 		std::cerr << filename << ": error: cannot open file\n";
@@ -114,15 +115,24 @@ bool compileFile (const std::string& filename) {
 		return false;
 	}
 
-	std::string stem = withExtension (filename, "");
 	std::string objPath = withExtension (filename, ".o");
 	std::string exePath = withExtension (filename, "");
 	std::string llPath = withExtension (filename, ".ll");
+
+	// 不保留中间产物时，用临时文件并在链接后清理
+	if (!keepIntermediate) {
+		objPath = "plangc_tmp.o";
+		llPath = "plangc_tmp.ll";
+	}
 
 	generator.saveToFile (llPath);
 
 	if (!generator.emitObject (objPath)) {
 		std::cerr << filename << ": error: object generation failed\n";
+		if (!keepIntermediate) {
+			fs::remove (objPath);
+			fs::remove (llPath);
+		}
 		return false;
 	}
 
@@ -138,19 +148,43 @@ bool compileFile (const std::string& filename) {
 #endif
 	if (linkResult != 0) {
 		std::cerr << filename << ": error: link failed\n";
-		return false;
 	}
 
-	return true;
+	if (!keepIntermediate) {
+		fs::remove (objPath);
+		fs::remove (llPath);
+	}
+
+	return linkResult == 0;
 }
 
 int main (int argc, char* argv[]) {
 	if (argc < 2) {
-		std::cerr << "usage: plangc <file.plang | directory>\n";
+		std::cerr << "usage: plangc [options] <file.plang | directory>\n";
+		std::cerr << "options:\n";
+		std::cerr << "  -k    keep intermediate files (.ll, .o)\n";
 		return 1;
 	}
 
-	std::string target = argv[1];
+	bool keepIntermediate = false;
+	std::string target;
+
+	for (int i = 1; i < argc; ++i) {
+		std::string arg = argv[i];
+		if (arg == "-k") {
+			keepIntermediate = true;
+		} else if (!arg.empty () && arg[0] == '-' && arg != ".") {
+			std::cerr << "unknown option: " << arg << "\n";
+			return 1;
+		} else {
+			target = arg;
+		}
+	}
+
+	if (target.empty ()) {
+		std::cerr << "no input file\n";
+		return 1;
+	}
 
 	// plangc . —— 编译目录下所有 .plang
 	if (target == "." || fs::is_directory (target)) {
@@ -167,7 +201,7 @@ int main (int argc, char* argv[]) {
 		int failed = 0;
 		for (const auto& f : files) {
 			std::cout << "compiling " << f << "\n";
-			if (!compileFile (f)) {
+			if (!compileFile (f, keepIntermediate)) {
 				failed++;
 			}
 		}
@@ -176,5 +210,5 @@ int main (int argc, char* argv[]) {
 	}
 
 	// plangc file.plang —— 编译单个文件
-	return compileFile (target) ? 0 : 1;
+	return compileFile (target, keepIntermediate) ? 0 : 1;
 }
