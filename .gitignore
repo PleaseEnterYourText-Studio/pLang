@@ -1,4 +1,4 @@
 /cmake-build-debug/
 /.idea/
 .vs/
-build/
+build/.DS_Store
