@@ -117,17 +117,50 @@ void LspServer::analyzeDocument(DocumentState& doc)
     catch (...)
     {
         doc.errors.emplace_back(parser.getErrorLine(), parser.getErrorColumn(), "syntax error");
-        return;
     }
 
-    Sema sema;
-    if (!sema.analyze(doc.program))
+    // 即使语法错误，也尽量收集已解析的部分符号（保证高亮不退化）
+    if (doc.program)
     {
-        doc.errors = sema.getErrors();
+        Sema sema;
+        if (!sema.analyze(doc.program))
+        {
+            doc.errors = sema.getErrors();
+        }
+        doc.warnings = sema.getWarnings();
+        collectSymbols(doc, doc.program.get());
+        doc.parsed = true;
     }
-    doc.warnings = sema.getWarnings();
-    collectSymbols(doc, doc.program.get());
-    doc.parsed = true;
+    else
+    {
+        // 语法错误时用 Lexer 兜底：识别 func/using/struct 后的名字
+        for (size_t i = 0; i + 1 < tokens.size(); ++i)
+        {
+            const auto& t = tokens[i];
+            if (t.type == TokenType::FUNC && tokens[i + 1].type == TokenType::IDENT)
+            {
+                SymbolInfo info;
+                info.name = tokens[i + 1].text;
+                info.uri = doc.uri;
+                int ln = tokens[i + 1].line - 1, col = tokens[i + 1].column - 1;
+                info.range = {{ln, col}, {ln, col + (int)info.name.size()}};
+                info.selectionRange = info.range;
+                info.kind = "function";
+                doc.symbols.push_back(info);
+            }
+            else if (t.type == TokenType::USING && tokens[i + 1].type == TokenType::IDENT)
+            {
+                SymbolInfo info;
+                info.name = tokens[i + 1].text;
+                info.uri = doc.uri;
+                int ln = tokens[i + 1].line - 1, col = tokens[i + 1].column - 1;
+                info.range = {{ln, col}, {ln, col + (int)info.name.size()}};
+                info.selectionRange = info.range;
+                info.kind = "type";
+                doc.symbols.push_back(info);
+            }
+        }
+    }
 }
 
 void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
