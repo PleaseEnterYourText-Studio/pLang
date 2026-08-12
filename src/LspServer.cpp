@@ -293,9 +293,10 @@ llvm::json::Object LspServer::initialize(const llvm::json::Value& params)
     capabilities["documentSymbolProvider"] = true;
     capabilities["semanticTokensProvider"] = llvm::json::Object{
         {"legend", llvm::json::Object{
-            {"tokenTypes", llvm::json::Array{"keyword", "type", "function", "variable",
+            {"tokenTypes", llvm::json::Array{"keyword", "type", "namespace", "function",
+                                              "parameter", "variable", "property",
                                               "number", "string", "operator", "comment"}},
-            {"tokenModifiers", llvm::json::Array{"declaration", "readonly"}},
+            {"tokenModifiers", llvm::json::Array{"declaration", "readonly", "static"}},
         }},
         {"full", true},
     };
@@ -401,8 +402,9 @@ llvm::json::Value LspServer::getSemanticTokens(const std::string& uri)
     auto tokens = lexer.scanTokens();
 
     // 语义 token 类型索引（与 legend 对应）
-    // 0=keyword 1=type 2=function 3=variable 4=number 5=string 6=operator 7=comment
-    auto tokenTypeOf = [](TokenType t) -> int {
+    // 0=keyword 1=type 2=namespace 3=function 4=parameter 5=variable
+    // 6=property 7=number 8=string 9=operator 10=comment
+    auto tokenTypeOf = [this, &doc](TokenType t, const std::string& text, int line, int column) -> int {
         switch (t)
         {
             // 关键字
@@ -415,37 +417,50 @@ llvm::json::Value LspServer::getSemanticTokens(const std::string& uri)
             case TokenType::AS: case TokenType::IF: case TokenType::ELSE:
             case TokenType::WHILE: case TokenType::FOR: case TokenType::DO:
                 return 0;
-            // 类型
+            // 类型（内置类型名）
             case TokenType::INT: case TokenType::CHAR: case TokenType::STRING_TYPE:
             case TokenType::WCHAR: case TokenType::WSTRING: case TokenType::BOOL:
             case TokenType::I8: case TokenType::I16: case TokenType::I32: case TokenType::I64:
             case TokenType::U8: case TokenType::U16: case TokenType::U32: case TokenType::U64:
             case TokenType::UINT: case TokenType::F32: case TokenType::F64:
                 return 1;
-            case TokenType::TRUE: case TokenType::FALSE:
-                return 3; // 布尔字面量当变量色
             case TokenType::NUMBER:
-                return 4;
+                return 7;
             case TokenType::STRING: case TokenType::CHAR_LIT:
-                return 5;
+                return 8;
             case TokenType::IDENT:
-                return 3; // 变量/函数名，Sema 可细化
+            {
+                // 用符号表判断：若是已声明的类型名 → type
+                if (!doc.program) return 5;
+                for (const auto& sym : doc.symbols)
+                {
+                    if (sym.name == text) return 5; // 已声明符号 → variable/function
+                }
+                // 未声明：可能是类型（大写）或未知
+                return 5;
+            }
             default:
-                return 6; // 运算符/标点
+                return 9; // 运算符/标点
         }
     };
 
     llvm::json::Array data;
     int prevLine = 0, prevChar = 0;
 
-    for (const auto& tok : tokens)
+    for (size_t i = 0; i < tokens.size(); ++i)
     {
+        const auto& tok = tokens[i];
         if (tok.type == TokenType::EOF_TOKEN || tok.type == TokenType::ERROR) continue;
 
         int line = tok.line - 1;       // 0 基
         int charStart = tok.column - 1;
         int len = (int)tok.text.size();
-        int typeIdx = tokenTypeOf(tok.type);
+
+        // 判断是否为函数调用（IDENT 后跟 (）
+        bool isFuncCall = (tok.type == TokenType::IDENT &&
+                           i + 1 < tokens.size() && tokens[i + 1].type == TokenType::LPAREN);
+        int typeIdx = tokenTypeOf(tok.type, tok.text, line, charStart);
+        if (isFuncCall && typeIdx == 5) typeIdx = 3; // 变量 → 函数
 
         // 增量编码：相对上一 token
         data.push_back(line - prevLine);
