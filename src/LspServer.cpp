@@ -145,6 +145,7 @@ void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
             info.range = {{fn->line - 1, fn->column - 1},
                           {fn->line - 1, fn->column - 1 + (int)fn->name.size()}};
             info.selectionRange = info.range;
+            info.kind = "function";
             doc.symbols.push_back(info);
             break;
         }
@@ -157,6 +158,7 @@ void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
             info.range = {{st->line - 1, st->column - 1},
                           {st->line - 1, st->column - 1 + (int)st->name.size()}};
             info.selectionRange = info.range;
+            info.kind = "type";
             doc.symbols.push_back(info);
             break;
         }
@@ -169,6 +171,11 @@ void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
             info.range = {{v->line - 1, v->column - 1},
                           {v->line - 1, v->column - 1 + (int)v->name.size()}};
             info.selectionRange = info.range;
+            // ParameterNode 复用 VARIABLE_DECL 类型，用 dynamic_cast 区分
+            if (dynamic_cast<ParameterNode*>(node))
+                info.kind = "parameter";
+            else
+                info.kind = (v->isVar ? "variable" : "constant");
             doc.symbols.push_back(info);
             break;
         }
@@ -295,7 +302,8 @@ llvm::json::Object LspServer::initialize(const llvm::json::Value& params)
         {"legend", llvm::json::Object{
             {"tokenTypes", llvm::json::Array{"keyword", "type", "namespace", "function",
                                               "parameter", "variable", "property",
-                                              "number", "string", "operator", "comment"}},
+                                              "number", "string", "operator", "comment",
+                                              "constant", "method"}},
             {"tokenModifiers", llvm::json::Array{"declaration", "readonly", "static"}},
         }},
         {"full", true},
@@ -403,8 +411,8 @@ llvm::json::Value LspServer::getSemanticTokens(const std::string& uri)
 
     // 语义 token 类型索引（与 legend 对应）
     // 0=keyword 1=type 2=namespace 3=function 4=parameter 5=variable
-    // 6=property 7=number 8=string 9=operator 10=comment
-    auto tokenTypeOf = [this, &doc](TokenType t, const std::string& text, int line, int column) -> int {
+    // 6=property 7=number 8=string 9=operator 10=comment 11=constant 12=method
+    auto tokenTypeOf = [this, &doc](TokenType t, const std::string& text) -> int {
         switch (t)
         {
             // 关键字
@@ -428,15 +436,20 @@ llvm::json::Value LspServer::getSemanticTokens(const std::string& uri)
                 return 7;
             case TokenType::STRING: case TokenType::CHAR_LIT:
                 return 8;
+            case TokenType::TRUE: case TokenType::FALSE:
+                return 11; // 布尔常量
             case TokenType::IDENT:
             {
-                // 用符号表判断：若是已声明的类型名 → type
-                if (!doc.program) return 5;
+                // 用符号表 kind 细分
                 for (const auto& sym : doc.symbols)
                 {
-                    if (sym.name == text) return 5; // 已声明符号 → variable/function
+                    if (sym.name != text) continue;
+                    if (sym.kind == "function") return 3;
+                    if (sym.kind == "parameter") return 4;
+                    if (sym.kind == "constant") return 11;
+                    if (sym.kind == "type") return 1;
+                    return 5; // variable
                 }
-                // 未声明：可能是类型（大写）或未知
                 return 5;
             }
             default:
@@ -459,8 +472,8 @@ llvm::json::Value LspServer::getSemanticTokens(const std::string& uri)
         // 判断是否为函数调用（IDENT 后跟 (）
         bool isFuncCall = (tok.type == TokenType::IDENT &&
                            i + 1 < tokens.size() && tokens[i + 1].type == TokenType::LPAREN);
-        int typeIdx = tokenTypeOf(tok.type, tok.text, line, charStart);
-        if (isFuncCall && typeIdx == 5) typeIdx = 3; // 变量 → 函数
+        int typeIdx = tokenTypeOf(tok.type, tok.text);
+        if (isFuncCall && (typeIdx == 5 || typeIdx == 11)) typeIdx = 12; // 调用 → method
 
         // 增量编码：相对上一 token
         data.push_back(line - prevLine);

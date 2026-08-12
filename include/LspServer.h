@@ -28,6 +28,7 @@ struct SymbolInfo {
     std::string uri;
     LspRange range;
     LspRange selectionRange;
+    std::string kind;   // function / variable / parameter / type / struct
 };
 
 // 文档状态
