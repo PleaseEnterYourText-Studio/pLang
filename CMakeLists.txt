@@ -98,6 +98,29 @@ add_executable(PLang
     src/CodeGenerator.cpp
 )
 
+# LSP 服务器
+add_executable(lsp-server
+    src/lsp-main.cpp
+    include/LspServer.h
+    include/Lexer.h
+    include/AST.h
+    include/Parser.h
+    include/Sema.h
+    include/SymbolTable.h
+    include/token.h
+    src/LspServer.cpp
+    src/Lexer.cpp
+    src/AST.cpp
+    src/Parser.cpp
+    src/Sema.cpp
+    src/SymbolTable.cpp
+)
+
+target_include_directories(lsp-server PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${LLVM_INCLUDE_DIRS}
+)
+
 target_include_directories(PLang PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
@@ -123,6 +146,8 @@ else()
 endif()
 
 target_link_libraries(PLang PRIVATE ${llvm_libs})
+
+target_link_libraries(lsp-server PRIVATE ${llvm_libs})
 
 # 监控 .plang 源码：修改后自动验证语法
 add_custom_command(

@@ -8,6 +8,7 @@
 #include "llvm/Support/JSON.h"
 #include "AST.h"
 #include "SymbolTable.h"
+#include "Sema.h"
 
 // LSP 位置（0 基）
 struct LspPosition {
@@ -26,6 +27,7 @@ struct SymbolInfo {
     std::string name;
     std::string uri;
     LspRange range;
+    LspRange selectionRange;
 };
 
 // 文档状态
@@ -34,6 +36,8 @@ struct DocumentState {
     std::string text;
     std::unique_ptr<ProgramNode> program;
     std::vector<SemaError> errors;
+    std::vector<SemaWarning> warnings;
+    std::vector<SymbolInfo> symbols;
     bool parsed;
 
     DocumentState() : parsed(false) {}
@@ -45,16 +49,24 @@ class LspServer
 private:
     std::unordered_map<std::string, std::shared_ptr<DocumentState>> documents;
     std::string rootUri;
+    bool clientSupportsSemanticTokens = false;
 
     // JSON-RPC
     llvm::json::Value handleRequest(const std::string& method, const llvm::json::Value& params);
     void handleNotification(const std::string& method, const llvm::json::Value& params);
+    void sendResponse(int id, const llvm::json::Value& result);
+    void sendNotification(const std::string& method, const llvm::json::Value& params);
+    llvm::json::Value makeError(int code, const std::string& message);
+
+    // 消息解析（Content-Length 帧）
+    std::string readMessage();
 
     // 文档
     void openDocument(const std::string& uri, const std::string& text);
     void updateDocument(const std::string& uri, const std::string& text);
     void closeDocument(const std::string& uri);
     void analyzeDocument(DocumentState& doc);
+    void collectSymbols(DocumentState& doc, ASTNode* node);
 
     // LSP 方法
     llvm::json::Object initialize(const llvm::json::Value& params);
@@ -65,8 +77,7 @@ private:
 
     // 辅助
     LspPosition offsetToPosition(const DocumentState& doc, int offset) const;
-    std::shared_ptr<Symbol> findSymbolAt(const DocumentState& doc, int line, int character);
-    std::string positionToURI(const std::string& uri);
+    std::string findSymbolNameAt(const DocumentState& doc, int line, int character);
 
 public:
     void run();
