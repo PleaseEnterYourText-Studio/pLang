@@ -263,7 +263,32 @@ void Lexer::scanString()
         return;
     }
 
-    std::string text = source.substr(start, pos - start);
+    std::string raw = source.substr(start, pos - start);
+    // 转义处理：\n \t \r \\ \" \0 \'
+    std::string text;
+    text.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        if (raw[i] == '\\' && i + 1 < raw.size())
+        {
+            char c = raw[++i];
+            switch (c)
+            {
+                case 'n': text += '\n'; break;
+                case 't': text += '\t'; break;
+                case 'r': text += '\r'; break;
+                case '0': text += '\0'; break;
+                case '\\': text += '\\'; break;
+                case '"': text += '"'; break;
+                case '\'': text += '\''; break;
+                default: text += c; break; // 未知转义：保留原字符
+            }
+        }
+        else
+        {
+            text += raw[i];
+        }
+    }
     advance();
     column++;
 
