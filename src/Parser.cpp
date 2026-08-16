@@ -29,16 +29,26 @@ std::unique_ptr<ProgramNode> Parser::parse()
         }
         else
         {
-            auto decl = parseDeclaration();
-            // 标注函数所属包（供跨包可见性检查与包限定调用解析使用）
-            if (decl)
+            try
             {
-                if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get()))
+                auto decl = parseDeclaration();
+                // 标注函数所属包（供跨包可见性检查与包限定调用解析使用）
+                if (decl)
                 {
-                    fn->packageName = program->packageName;
+                    if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get()))
+                    {
+                        fn->packageName = program->packageName;
+                    }
                 }
+                if (decl) program->decls.push_back(std::move(decl));
             }
-            if (decl) program->decls.push_back(std::move(decl));
+            catch (const std::runtime_error& e)
+            {
+                // 错误恢复：记录并跳到下一个顶层声明
+                errors.push_back({errorLine, errorColumn, e.what()});
+                while (!check(TokenType::SEMICOLON) && !isAtEnd()) advance();
+                match(TokenType::SEMICOLON);
+            }
         }
     }
     return program;
@@ -576,8 +586,18 @@ std::unique_ptr<ASTNode> Parser::parseBlock()
     auto block = std::make_unique<BlockStmtNode>(start.line, start.column);
     while (!check(TokenType::RBRACE) && !isAtEnd())
     {
-        auto stmt = parseStatement();
-        if (stmt) block->statements.push_back(std::move(stmt));
+        try
+        {
+            auto stmt = parseStatement();
+            if (stmt) block->statements.push_back(std::move(stmt));
+        }
+        catch (const std::runtime_error& e)
+        {
+            // 错误恢复：记录并同步到语句结束，继续解析后续语句
+            errors.push_back({errorLine, errorColumn, e.what()});
+            while (!check(TokenType::SEMICOLON) && !check(TokenType::RBRACE) && !isAtEnd()) advance();
+            match(TokenType::SEMICOLON);
+        }
     }
     expect(TokenType::RBRACE, "expected }");
     return block;

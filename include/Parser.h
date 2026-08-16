@@ -7,10 +7,19 @@
 #include "token.h"
 #include "AST.h"
 
+// 解析错误（支持多错误收集）
+struct ParserError
+{
+    int line;
+    int column;
+    std::string message;
+};
+
 class Parser
 {
 private:
     std::vector<Token> tokens;
+    std::vector<ParserError> errors;
     size_t pos;
     int errorLine = 0;
     int errorColumn = 0;
@@ -19,6 +28,7 @@ public:
     explicit Parser(std::vector<Token> tokens);
 
     std::unique_ptr<ProgramNode> parse();
+    const std::vector<ParserError>& getErrors() const { return errors; }
 
     int getErrorLine() const { return errorLine; }
     int getErrorColumn() const { return errorColumn; }

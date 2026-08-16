@@ -298,6 +298,15 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
             printError(src, source, parser.getErrorLine(), parser.getErrorColumn(), e.what());
             return false;
         }
+        // 报告该文件全部解析错误（错误恢复收集）
+        for (auto& perr : parser.getErrors())
+        {
+            printError(src, source, perr.line, perr.column, perr.message);
+        }
+        if (!parser.getErrors().empty())
+        {
+            return false;
+        }
     }
 
     // 1.5) 校验包名一致性：一个目录为一个包，同一编译单元的所有文件必须声明同一个包
