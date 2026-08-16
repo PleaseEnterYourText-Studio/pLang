@@ -7,7 +7,7 @@ package std.io;
 extern func puts(var -> var: ptr s) : int;
 extern func putchar(val: int c) : int;
 extern func getchar() : int;
-extern func printf(var -> var: ptr fmt, var -> var: ptr arg) : int;
+pub extern func printf(var -> var: ptr fmt, ...) : int;   // 变参：io.printf("%d", n)
 extern func scanf(var -> var: ptr fmt, var -> var: ptr arg) : int;
 extern func fgets(var -> var: ptr buf, val: int size, var -> var: ptr stream) -> var: ptr;
 extern func fflush(var -> var: ptr stream) : int;

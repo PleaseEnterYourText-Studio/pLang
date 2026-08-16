@@ -156,6 +156,9 @@ func main() : int {
     io.println("");
     io.flush();
 
+    // 万能格式化（变参 printf）
+    io.printf("%s %d %x\n", "printf", 42, 255);
+
     // 堆内存：分配 4 个 int，写入并释放
     var -> var: int hp = mem.malloc(16);
     if (hp != null) {

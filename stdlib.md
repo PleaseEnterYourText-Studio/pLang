@@ -196,3 +196,23 @@ func main() : int {
 ```
 
 > 注意：`n` 为字节数；按元素访问需自行乘元素大小（`int` 为 4 字节）。
+
+---
+
+# 变参 FFI 与 io.printf
+
+extern 声明支持变参 `...`（仅限最后一个参数），用于 `printf` 这类 C 变参函数：
+
+```plang
+pub extern func printf(var -> var: ptr fmt, ...) : int;
+```
+
+`io.printf(fmt, ...)` 万能格式化：
+
+```plang
+io.printf("%s %d\n", "value=", 42);   // value= 42
+io.printf("pi=%.2f\n", 3.14159);      // pi=3.14
+io.printf("hex=%x\n", 255);           // hex=ff
+```
+
+> 格式符与实参类型必须匹配（`%d`→int、`%f`→f64、`%s`→字符串/指针、`%x`→int）。
