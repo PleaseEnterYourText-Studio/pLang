@@ -5,6 +5,7 @@ import std.thread;
 import std.io;
 import std.atomic;
 import std.mem;
+import std.sqlite;
 
 /* 块注释 */
 // 行注释
@@ -200,6 +201,17 @@ func main() : int {
     io.printInt(vector.get<int>(&v, 0));  // 10
     io.println("");
     vector.destroy<int>(&v);
+
+    // SQLite：建表、插入、查询
+    var -> var: ptr db = sqlite.open("plang_demo.db");
+    if (db != null) {
+        sqlite.exec(db, "DROP TABLE IF EXISTS user");
+        sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT)");
+        sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice')");
+        sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob')");
+        sqlite.query(db, "SELECT * FROM user");   // 1|Alice  2|Bob
+        sqlite.close(db);
+    }
 
     return 82;
 }
