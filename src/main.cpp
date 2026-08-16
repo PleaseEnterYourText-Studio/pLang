@@ -90,9 +90,10 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
 #elif defined(__linux__)
     cmd = "ld -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
-    // Linux 需要 crt 文件，用 gcc 驱动更简单
+    // Linux 需要 crt 文件，用 gcc 驱动更简单；多线程需要链接 pthread
     cmd = "g++ -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
+    cmd += " -pthread";
 #else
     std::cerr << "error: unsupported platform for linking\n";
     return false;

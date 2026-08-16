@@ -509,7 +509,13 @@ std::string Sema::visitLogical(LogicalOpNode* node)
 
 std::string Sema::visitCall(FunctionCallNode* node)
 {
-    // 成员方法调用 circle.area() —— 拆分根对象与方法名
+    // std.thread 编译器内置调用（仅 spawn / sleep / mutex.create；其余为 std.thread 源码库函数）
+    if (node->name == "thread.spawn" || node->name == "thread.sleep" ||
+        node->name == "thread.mutex.create")
+    {
+        return visitThreadCall(node);
+    }
+
     // 成员方法调用 circle.area() / 包限定调用 thread.join() —— 拆分根对象与方法名
     size_t dot = node->name.find('.');
     if (dot != std::string::npos)
@@ -630,6 +636,83 @@ std::string Sema::visitCall(FunctionCallNode* node)
         }
     }
     return sym->returnType;
+}
+
+// std.thread 编译器内置（仅 spawn / sleep / mutex.create）
+
+std::string Sema::visitThreadCall(FunctionCallNode* node)
+{
+    if (importedModules.find("std.thread") == importedModules.end())
+    {
+        error(node->line, node->column,
+              "module 'std.thread' is not imported (add 'import std.thread;')");
+        return "";
+    }
+
+    const std::string& full = node->name;
+    const size_t argCount = node->arguments.size();
+
+    auto checkArgCount = [&](size_t expected) -> bool
+    {
+        if (argCount == expected) return true;
+        error(node->line, node->column, "function '" + full + "' expects " +
+              std::to_string(expected) + " argument(s), got " + std::to_string(argCount));
+        return false;
+    };
+
+    auto isNumeric = [&](const std::string& t) -> bool
+    {
+        return isNumericType(t);
+    };
+
+    // thread.spawn(fn)：启动线程运行无参函数，返回线程句柄（pointer）
+    if (full == "thread.spawn")
+    {
+        if (!checkArgCount(1)) return "";
+        auto* ref = dynamic_cast<VariableRefNode*>(node->arguments[0].get());
+        std::string fnName = ref ? ref->name : "";
+        if (fnName.empty() || fnName.find('.') != std::string::npos)
+        {
+            error(node->line, node->column, "thread.spawn expects a function name");
+            return "";
+        }
+        auto fnSym = symbols.lookup(fnName);
+        if (!fnSym || fnSym->kind != SymbolKind::FUNCTION)
+        {
+            error(node->line, node->column, "thread.spawn expects a function name, got '" + fnName + "'");
+            return "";
+        }
+        if (!fnSym->paramTypes.empty())
+        {
+            error(node->line, node->column,
+                  "thread.spawn function '" + fnName + "' must not take parameters");
+            return "";
+        }
+        return "pointer";
+    }
+
+    // thread.sleep(ms)：当前线程休眠指定毫秒
+    if (full == "thread.sleep")
+    {
+        if (!checkArgCount(1)) return "";
+        std::string ms = visitExpr(node->arguments[0].get());
+        if (!ms.empty() && !isNumeric(ms))
+        {
+            error(node->line, node->column,
+                  "thread.sleep expects a numeric duration in milliseconds, got '" + ms + "'");
+        }
+        return "";
+    }
+
+    // thread.mutex.create()：从池中分配并初始化一把互斥锁，返回其地址（pointer）
+    if (full == "thread.mutex.create")
+    {
+        if (!checkArgCount(0)) return "";
+        return "pointer";
+    }
+
+    error(node->line, node->column, "unknown function '" + full + "' in module std.thread");
+    return "";
 }
 
 std::string Sema::visitLiteralInt(LiteralIntNode* node)

@@ -304,6 +304,13 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
         case ASTNodeType::FUNCTION_CALL: {
             auto* call = static_cast<FunctionCallNode*>(node);
+
+            // std.thread 编译器内置调用（spawn / sleep / mutex.create）
+            if (call->name == "thread.spawn" || call->name == "thread.sleep" ||
+                call->name == "thread.mutex.create") {
+                return generateThreadBuiltin(call);
+            }
+
             // 成员方法调用 obj.method() —— 结构体方法暂不完整实现
             if (call->name.find('.') != std::string::npos) {
                 // 生成参数表达式但不调用
@@ -793,3 +800,148 @@ llvm::Type* CodeGenerator::unifyOperands(llvm::Value*& left, llvm::Value*& right
 
 // std.thread 编译器内置支持
 
+// 获取（或声明）一个外部 C 函数
+llvm::Function* CodeGenerator::getOrDeclareFunction(const std::string& name,
+                                                    llvm::Type* retType,
+                                                    const std::vector<llvm::Type*>& paramTypes)
+{
+    if (auto* existing = module->getFunction(name))
+    {
+        return existing;
+    }
+    llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, false);
+    return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, module.get());
+}
+
+// 互斥锁池：[64 x [64 x i8]]，每个槽位可容纳一个 pthread_mutex_t（全局唯一）
+llvm::GlobalVariable* CodeGenerator::getMutexPool()
+{
+    llvm::Type* slotTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(context), 64);
+    llvm::Type* poolTy = llvm::ArrayType::get(slotTy, 64);
+    llvm::Constant* pool = module->getOrInsertGlobal("plangMutexPool", poolTy);
+    if (auto* global = llvm::dyn_cast<llvm::GlobalVariable>(pool))
+    {
+        if (global->hasInitializer() == false)
+        {
+            global->setInitializer(llvm::ConstantAggregateZero::get(poolTy));
+            global->setLinkage(llvm::GlobalValue::InternalLinkage);
+        }
+        return global;
+    }
+    return nullptr;
+}
+
+// 由槽位句柄（i64 下标）计算池内地址并转为 i8*
+llvm::Value* CodeGenerator::getMutexSlotAddress(llvm::Value* slotValue)
+{
+    llvm::GlobalVariable* pool = getMutexPool();
+    llvm::PointerType* ptrTy = llvm::PointerType::get(context, 0);
+    if (!pool)
+    {
+        std::cerr << "Error: failed to create mutex pool" << std::endl;
+        return llvm::ConstantPointerNull::get(ptrTy);
+    }
+    llvm::Value* slot = builder.CreateIntCast(slotValue, llvm::Type::getInt64Ty(context), true, "mutexSlot");
+    std::vector<llvm::Value*> indices = {
+        builder.getInt32(0),
+        builder.CreateIntCast(slot, llvm::Type::getInt32Ty(context), true, "mutexSlotIdx")
+    };
+    llvm::Value* slotPtr = builder.CreateGEP(pool->getValueType(), pool, indices, "mutexSlotPtr");
+    return builder.CreateBitCast(slotPtr, ptrTy, "mutexSlotI8");
+}
+
+// 生成 thread.* 编译器内置调用（仅 spawn / sleep / mutex.create）
+llvm::Value* CodeGenerator::generateThreadBuiltin(FunctionCallNode* call)
+{
+    const std::string& name = call->name;
+    llvm::PointerType* ptrTy = llvm::PointerType::get(context, 0);
+    llvm::Value* nullPtr = llvm::ConstantPointerNull::get(ptrTy);
+
+    // thread.spawn(fn)：启动线程运行无参函数 fn，返回线程句柄（pointer）
+    if (name == "thread.spawn")
+    {
+        if (call->arguments.size() != 1)
+        {
+            std::cerr << "Error: thread.spawn expects 1 argument" << std::endl;
+            return nullPtr;
+        }
+        auto* ref = dynamic_cast<VariableRefNode*>(call->arguments[0].get());
+        if (!ref)
+        {
+            std::cerr << "Error: thread.spawn expects a function name" << std::endl;
+            return nullPtr;
+        }
+        llvm::Function* target = module->getFunction(ref->name);
+        if (!target)
+        {
+            std::cerr << "Error: thread.spawn target '" << ref->name << "' not found" << std::endl;
+            return nullPtr;
+        }
+
+        // 蹦床函数：void* trampoline(void*) { target(); return nullptr; }
+        std::string trampName = "plangThreadTrampoline" + std::to_string(threadTrampolineCounter++);
+        llvm::FunctionType* trampTy = llvm::FunctionType::get(ptrTy, {ptrTy}, false);
+        llvm::Function* tramp = llvm::Function::Create(
+            trampTy, llvm::Function::InternalLinkage, trampName, module.get());
+
+        llvm::BasicBlock* savedBlock = builder.GetInsertBlock();
+        llvm::BasicBlock::iterator savedPoint = builder.GetInsertPoint();
+
+        llvm::BasicBlock* trampEntry = llvm::BasicBlock::Create(context, "entry", tramp);
+        builder.SetInsertPoint(trampEntry);
+        builder.CreateCall(target, {});
+        builder.CreateRet(nullPtr);
+
+        builder.SetInsertPoint(savedBlock, savedPoint);
+
+        // pthread_create(&handle, nullptr, trampoline, nullptr)
+        llvm::Function* pthreadCreate = getOrDeclareFunction(
+            "pthread_create", llvm::Type::getInt32Ty(context), {ptrTy, ptrTy, ptrTy, ptrTy});
+        llvm::AllocaInst* handle = builder.CreateAlloca(ptrTy, nullptr, "threadHandle");
+        builder.CreateCall(pthreadCreate, {handle, nullPtr, builder.CreateBitCast(tramp, ptrTy), nullPtr});
+        return builder.CreateLoad(ptrTy, handle, "threadId");
+    }
+
+    // thread.sleep(ms)：休眠指定毫秒
+    if (name == "thread.sleep")
+    {
+        llvm::Value* ms = generateExpression(call->arguments[0].get());
+        ms = builder.CreateIntCast(ms, llvm::Type::getInt64Ty(context), true, "sleepMs");
+
+        // struct timespec { time_t tv_sec; long tv_nsec; }
+        llvm::Type* tsTy = llvm::ArrayType::get(llvm::Type::getInt64Ty(context), 2);
+        llvm::AllocaInst* ts = builder.CreateAlloca(tsTy, nullptr, "timespec");
+        llvm::Value* sec = builder.CreateSDiv(ms, llvm::ConstantInt::get(context, llvm::APInt(64, 1000)), "sleepSec");
+        llvm::Value* rem = builder.CreateSRem(ms, llvm::ConstantInt::get(context, llvm::APInt(64, 1000)), "sleepRem");
+        llvm::Value* nsec = builder.CreateMul(rem, llvm::ConstantInt::get(context, llvm::APInt(64, 1000000)), "sleepNsec");
+        std::vector<llvm::Value*> secIdx = {builder.getInt32(0), builder.getInt32(0)};
+        std::vector<llvm::Value*> nsecIdx = {builder.getInt32(0), builder.getInt32(1)};
+        builder.CreateStore(sec, builder.CreateGEP(tsTy, ts, secIdx, "tvSecPtr"));
+        builder.CreateStore(nsec, builder.CreateGEP(tsTy, ts, nsecIdx, "tvNsecPtr"));
+
+        llvm::Function* nanosleep = getOrDeclareFunction(
+            "nanosleep", llvm::Type::getInt32Ty(context), {ptrTy, ptrTy});
+        builder.CreateCall(nanosleep, {builder.CreateBitCast(ts, ptrTy), nullPtr});
+        return nullptr;
+    }
+
+    // thread.mutex.create()：从池中分配并初始化一把互斥锁，返回其地址（pointer）
+    if (name == "thread.mutex.create")
+    {
+        if (mutexSlotCount >= 64)
+        {
+            std::cerr << "Error: mutex pool exhausted (max 64)" << std::endl;
+            return nullPtr;
+        }
+        int slot = mutexSlotCount++;
+        llvm::Value* slotAddr = getMutexSlotAddress(
+            llvm::ConstantInt::get(context, llvm::APInt(64, (uint64_t)slot, true)));
+        llvm::Function* mutexInit = getOrDeclareFunction(
+            "pthread_mutex_init", llvm::Type::getInt32Ty(context), {ptrTy, ptrTy});
+        builder.CreateCall(mutexInit, {slotAddr, nullPtr});
+        return slotAddr;
+    }
+
+    std::cerr << "Error: unknown std.thread builtin '" << name << "'" << std::endl;
+    return nullPtr;
+}

@@ -34,6 +34,10 @@ private:
     };
     std::unordered_map<std::string, VarInfo> namedValues;
 
+    // std.thread 内置支持
+    int mutexSlotCount = 0;             // 已分配的互斥锁槽位数（池上限 64）
+    int threadTrampolineCounter = 0;    // 线程入口蹦床函数计数器
+
     llvm::Type* getLLVMType(ASTNodeType type);
     llvm::Type* getLLVMType(TypeNode* type);
     llvm::Type* getLLVMType(const std::string& typeName);
@@ -42,6 +46,14 @@ private:
     llvm::Value* generateExpression(ASTNode* node);
     void generateStatement(ASTNode* node);
     void generateFunction(FunctionDeclNode* fn);
+
+    // std.thread 内置调用生成
+    llvm::Value* generateThreadBuiltin(FunctionCallNode* call);
+    llvm::Function* getOrDeclareFunction(const std::string& name,
+                                         llvm::Type* retType,
+                                         const std::vector<llvm::Type*>& paramTypes);
+    llvm::GlobalVariable* getMutexPool();
+    llvm::Value* getMutexSlotAddress(llvm::Value* slotValue);
 
     // 统一二元/比较操作数类型（整数拓宽、整数↔浮点提升），返回公共类型
     llvm::Type* unifyOperands(llvm::Value*& left, llvm::Value*& right);
