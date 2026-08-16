@@ -1,6 +1,7 @@
 package demo;
 import std.vector;
 import std.string;
+import std.thread;
 
 /* 块注释 */
 // 行注释
@@ -30,6 +31,21 @@ func add(val: int a, val: int b) -> int {
 func useMoved(val: string s) -> int {
     var: string copy = s;
     return 1;
+}
+
+// 线程入口：CPU 密集计算
+func burn() -> int {
+    var: i64 i = 0;
+    while (i < 2000000000) {
+        i = i + 1;
+    }
+    return 0;
+}
+
+// 线程入口：休眠 50ms
+func snooze() -> int {
+    thread.sleep(50);
+    return 0;
 }
 
 func main() -> int {
@@ -97,6 +113,24 @@ func main() -> int {
     // 接口动态分派
     var: Circle circle = {5};
     var: f64 area = circle.area();
+
+    // 两线程并行各跑 2e9 次循环
+    var -> var: ptr t1 = thread.spawn(burn);
+    var -> var: ptr t2 = thread.spawn(burn);
+    thread.join(t1);
+    thread.join(t2);
+
+    // 休眠线程
+    var -> var: ptr t3 = thread.spawn(snooze);
+    thread.join(t3);
+
+    // 互斥锁：创建 → 加锁 → 解锁 → 销毁
+    var -> var: ptr m = thread.mutex.create();
+    thread.lock(m);
+    thread.unlock(m);
+    thread.destroy(m);
+
+    thread.yield();
 
     return 82;
 }

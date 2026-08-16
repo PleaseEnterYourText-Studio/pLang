@@ -59,6 +59,8 @@ val: string userName = "plang";
 - `func` `impl` `return`: 函数定义/实现/返回.
 - `using` `struct` `abstract`: 类型定义.
 - `pub` `prt` `pri`: 访问权限.
+- `extern`: 外部函数声明 (FFI).
+- `null`: 空指针字面量.
 - `this` `thisType`: 当前实例与自身类型.
 - `type`: 模板类型参数.
 - `as`: 强制类型转换.
@@ -292,6 +294,57 @@ using Circle = struct : pub Shape {
 - `std.vector.vec`: 可变长数组, 有运行环境下可使用堆内存, 否则abort.
 - `std.string.str`: 可变ASCII字符串, 有运行环境下可使用堆内存, 否则强制使用栈.
 - `std.string.wstr`: 可变UTF-32字符串，有运行环境下可时候堆内存, 否则强制使用栈.
+
+# 多线程 (std.thread)
+`std.thread` 是**真正的源码库**，位于 `std/thread/thread.plang`：`import std.thread;` 后编译器会解析该包源码并合并编译。
+其中 `join` / `yield` / `lock` / `unlock` / `destroy` 是库内用源码实现的函数（内部通过 `extern` 调用 pthread），
+`spawn` / `sleep` / `mutex.create` 因需要蹦床与全局锁池而保留为编译器内置。
+
+## 线程
+使用 `thread.spawn` 启动一个新线程运行一个**无参函数**, 返回线程句柄（`var -> var: ptr`）;
+`thread.join` 阻塞等待该线程结束:
+```plang
+import std.thread;
+
+func worker() -> int {
+    // 线程体
+    return 0;
+}
+
+func main() -> int {
+    var -> var: ptr t1 = thread.spawn(worker);
+    var -> var: ptr t2 = thread.spawn(worker);
+    thread.join(t1);
+    thread.join(t2);
+    return 0;
+}
+```
+- 线程入口必须是无参函数, 返回值被忽略.
+- `join` 前线程与主线程并行执行; 程序退出前应 `join` 所有已 spawn 的线程.
+
+## 互斥锁
+互斥锁由编译器维护一个全局锁池 (上限 64 把), `thread.mutex.create()` 分配并初始化一把锁,
+返回其地址（`var -> var: ptr`）; `lock` / `unlock` / `destroy` 加锁 / 解锁 / 销毁:
+```plang
+var -> var: ptr m = thread.mutex.create();
+thread.lock(m);
+// 临界区
+thread.unlock(m);
+thread.destroy(m);
+```
+
+## 其他
+- `thread.sleep(ms)`: 当前线程休眠指定毫秒数（编译器内置）.
+- `thread.yield()`: 当前线程主动让出 CPU（源码库实现）.
+
+# 外部函数接口 (extern FFI)
+使用 `extern func` 声明 C 函数, 编译器映射为 LLVM 外部声明 (declare), 链接期解析符号:
+```plang
+extern func sched_yield() -> int;
+extern func pthread_join(var -> var: ptr handle, var -> var: ptr result) -> int;
+```
+- 参数类型使用指针类型 `var -> var: ptr`（通用指针）, 空指针字面量写作 `null`.
+- extern 声明属于声明所在包, 遵循包可见性规则（跨包调用需 `pub`）.
 
 # 函数
 ## 函数的定义
