@@ -112,8 +112,17 @@ std::string getStdlibRoot(const std::string& exePath)
     {
         return env;
     }
-    // 默认：可执行文件所在目录的上一级（build/PLang → 仓库根）
-    fs::path exeDir = fs::path(exePath).parent_path();
+    // 默认：可执行文件所在目录的上一级（build/PLang → 仓库根）；规范化路径以兼容相对 argv[0]
+    fs::path exeAbs;
+    try
+    {
+        exeAbs = fs::canonical(fs::path(exePath));
+    }
+    catch (...)
+    {
+        exeAbs = fs::absolute(fs::path(exePath));
+    }
+    fs::path exeDir = exeAbs.parent_path();
     return exeDir.parent_path().string();
 }
 
