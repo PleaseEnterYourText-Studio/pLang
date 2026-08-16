@@ -502,7 +502,7 @@ void Sema::instantiateGeneric(const std::string& mangled)
 
     auto sym = std::make_shared<Symbol>(mangled, SymbolKind::STRUCT, SymbolMutability::VAL,
                                         "type", (int)mangled.size(), 0);
-    symbols.declare(mangled, sym);
+    symbols.declareGlobal(mangled, sym); // 根作用域，跨函数可见
     StructInfo info;
     for (auto& m : clone->members)
     {

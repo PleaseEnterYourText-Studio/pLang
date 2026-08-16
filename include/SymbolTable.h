@@ -66,6 +66,7 @@ public:
     void popScope();
 
     bool declare(const std::string& name, std::shared_ptr<Symbol> symbol);
+    bool declareGlobal(const std::string& name, std::shared_ptr<Symbol> symbol);  // 根作用域声明（泛型实例化用）
     std::shared_ptr<Symbol> lookup(const std::string& name) const;
     std::shared_ptr<Symbol> lookupLocal(const std::string& name) const;
 };
