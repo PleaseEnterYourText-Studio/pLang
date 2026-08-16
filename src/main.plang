@@ -56,9 +56,9 @@ func burn() : int {
 }
 
 // 指针返回：func foo() -> var T（与 var -> var: T 的箭头写法统一）
-func getCounter() -> var: int {
-    var: int counter = 42;
-    return &counter;
+// 借用检查：不能返回局部变量地址，改为返回参数指针（生命周期由调用方保证）
+func getCounter(var -> var: int p) -> var: int {
+    return p;
 }
 
 // 线程入口：休眠 50ms
@@ -91,8 +91,8 @@ func main() : int {
     var ref@a;
     *p = 1;
 
-    // 指针返回
-    var -> var: int q = getCounter();
+    // 指针返回（参数指针，借用检查合法）
+    var -> var: int q = getCounter(&a);
     *q = 1;
 
     // 数组
@@ -189,6 +189,17 @@ func main() : int {
         io.println("");
         mem.free(hp);
     }
+
+    // 基础容器：Vec<int> 动态数组（含扩容）
+    var: Vec<int> v = vector.new<int>(2);
+    vector.push<int>(&v, 10);
+    vector.push<int>(&v, 20);
+    vector.push<int>(&v, 30);
+    io.printInt(vector.len<int>(&v));     // 3
+    io.println("");
+    io.printInt(vector.get<int>(&v, 0));  // 10
+    io.println("");
+    vector.destroy<int>(&v);
 
     return 82;
 }
