@@ -5,6 +5,8 @@
 #include <vector>
 #include <memory>
 #include <cstdlib>
+#include <algorithm>
+#include <set>
 #include <filesystem>
 #include "Lexer.h"
 #include "Parser.h"
@@ -102,11 +104,25 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
     return std::system(cmd.c_str()) == 0;
 }
 
-// ===== 编译单个源文件为 .o =====
-bool compileToObject(const std::string& filename, bool keepIntermediate, 
-                     const std::string& objPath) {
+// 标准库根目录
+// import std.thread 对应目录 <root>/std/thread，故 root 为包层级根（仓库根）。
+std::string getStdlibRoot(const std::string& exePath)
+{
+    if (const char* env = std::getenv("PLANG_STD"))
+    {
+        return env;
+    }
+    // 默认：可执行文件所在目录的上一级（build/PLang → 仓库根）
+    fs::path exeDir = fs::path(exePath).parent_path();
+    return exeDir.parent_path().string();
+}
+
+// 解析单个源文件（词法+语法），出错返回 false
+bool parseSourceFile(const std::string& filename, std::unique_ptr<ProgramNode>& outProgram)
+{
     std::ifstream file(filename);
-    if (!file.is_open()) {
+    if (!file.is_open())
+    {
         std::cerr << filename << ": error: cannot open file\n";
         return false;
     }
@@ -115,58 +131,218 @@ bool compileToObject(const std::string& filename, bool keepIntermediate,
     buffer << file.rdbuf();
     std::string source = buffer.str();
 
-    // 词法分析
     Lexer lexer(source);
     auto tokens = lexer.scanTokens();
-    int lexErrors = 0;
-    for (const auto& tok : tokens) {
-        if (tok.type == TokenType::ERROR) {
+    for (const auto& tok : tokens)
+    {
+        if (tok.type == TokenType::ERROR)
+        {
             printError(filename, source, tok.line, tok.column, tok.text);
-            lexErrors++;
+            return false;
         }
     }
-    if (lexErrors > 0) return false;
 
-    // 语法分析
     Parser parser(tokens);
-    std::unique_ptr<ProgramNode> program;
-    try {
-        program = parser.parse();
-    } catch (const std::exception& e) {
+    try
+    {
+        outProgram = parser.parse();
+    }
+    catch (const std::exception& e)
+    {
         printError(filename, source, parser.getErrorLine(), parser.getErrorColumn(), e.what());
         return false;
     }
+    return true;
+}
 
-    // 语义分析
-    Sema sema;
-    bool ok = sema.analyze(program);
-    for (const auto& w : sema.getWarnings()) {
-        printWarning(filename, source, w.line, w.column, w.message);
+// 递归解析导入的包并合并声明到宿主程序（带环检测）
+void resolveModule(ProgramNode* hostProgram, const std::string& path, const std::string& stdlibRoot,
+                   std::set<std::string>& resolved, std::vector<std::string>& importStack,
+                   bool& errorFlag)
+{
+    if (resolved.count(path)) return;
+
+    // 环检测：import 链上再次出现同一模块
+    for (const auto& s : importStack)
+    {
+        if (s == path)
+        {
+            std::cerr << "error: circular import of '" << path << "'" << std::endl;
+            errorFlag = true;
+            return;
+        }
     }
-    if (!ok) {
-        for (const auto& err : sema.getErrors()) {
-            printError(filename, source, err.line, err.column, err.message);
+
+    std::string modPath = path;
+    std::replace(modPath.begin(), modPath.end(), '.', '/');
+    fs::path moduleDir = fs::path(stdlibRoot) / modPath;
+    if (!fs::is_directory(moduleDir))
+    {
+        resolved.insert(path); // 模块不存在：静默忽略（保持现状）
+        return;
+    }
+
+    importStack.push_back(path);
+    for (const auto& entry : fs::directory_iterator(moduleDir))
+    {
+        if (entry.path().extension() != ".plang") continue;
+
+        std::unique_ptr<ProgramNode> libProgram;
+        if (!parseSourceFile(entry.path().string(), libProgram))
+        {
+            errorFlag = true;
+            continue;
+        }
+        if (libProgram->packageName != path)
+        {
+            std::cerr << entry.path().string() << ": error: package '" << libProgram->packageName
+                      << "' does not match import path '" << path << "'" << std::endl;
+            errorFlag = true;
+            continue;
+        }
+        // 先递归解析库自身的 import
+        for (auto& imp : libProgram->imports)
+        {
+            auto* importNode = dynamic_cast<ImportStmtNode*>(imp.get());
+            if (importNode)
+            {
+                resolveModule(hostProgram, importNode->path, stdlibRoot, resolved, importStack, errorFlag);
+            }
+        }
+        // 库的声明与 import 并入宿主程序（合并单模块代码生成）
+        for (auto& decl : libProgram->decls)
+        {
+            hostProgram->decls.push_back(std::move(decl));
+        }
+        for (auto& imp : libProgram->imports)
+        {
+            hostProgram->imports.push_back(std::move(imp));
+        }
+    }
+    importStack.pop_back();
+    resolved.insert(path);
+}
+
+void resolveImports(ProgramNode* program, const std::string& stdlibRoot, bool& errorFlag)
+{
+    std::set<std::string> resolved;
+    std::vector<std::string> importStack;
+    // 快照当前 import 列表（解析过程会向 program->imports 追加）
+    std::vector<std::string> paths;
+    for (auto& imp : program->imports)
+    {
+        auto* importNode = dynamic_cast<ImportStmtNode*>(imp.get());
+        if (importNode) paths.push_back(importNode->path);
+    }
+    for (const auto& path : paths)
+    {
+        resolveModule(program, path, stdlibRoot, resolved, importStack, errorFlag);
+    }
+}
+
+// 编译整个编译单元（合并 + import 解析 + 单次语义分析/代码生成）
+bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
+                 const std::string& objPath, const std::string& stdlibRoot)
+{
+    if (sources.empty()) return false;
+
+    // 1) 解析所有源文件
+    std::vector<std::unique_ptr<ProgramNode>> programs;
+    std::vector<std::string> sourceTexts;
+    for (const auto& src : sources)
+    {
+        std::ifstream file(src);
+        if (!file.is_open())
+        {
+            std::cerr << src << ": error: cannot open file\n";
+            return false;
+        }
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string source = buffer.str();
+        sourceTexts.push_back(source);
+
+        Lexer lexer(source);
+        auto tokens = lexer.scanTokens();
+        bool lexOk = true;
+        for (const auto& tok : tokens)
+        {
+            if (tok.type == TokenType::ERROR)
+            {
+                printError(src, source, tok.line, tok.column, tok.text);
+                lexOk = false;
+            }
+        }
+        if (!lexOk) return false;
+
+        Parser parser(tokens);
+        try
+        {
+            programs.push_back(parser.parse());
+        }
+        catch (const std::exception& e)
+        {
+            printError(src, source, parser.getErrorLine(), parser.getErrorColumn(), e.what());
+            return false;
+        }
+    }
+
+    // 2) 合并：以第一个文件为主程序，其余文件声明与 import 并入
+    std::unique_ptr<ProgramNode> merged = std::move(programs[0]);
+    for (size_t i = 1; i < programs.size(); ++i)
+    {
+        for (auto& decl : programs[i]->decls)
+        {
+            merged->decls.push_back(std::move(decl));
+        }
+        for (auto& imp : programs[i]->imports)
+        {
+            merged->imports.push_back(std::move(imp));
+        }
+        if (merged->packageName.empty()) merged->packageName = programs[i]->packageName;
+    }
+
+    // 3) 解析 import：加载标准库包源码并合并
+    bool importError = false;
+    resolveImports(merged.get(), stdlibRoot, importError);
+    if (importError) return false;
+
+    // 4) 语义分析
+    Sema sema;
+    bool ok = sema.analyze(merged);
+    for (const auto& w : sema.getWarnings())
+    {
+        printWarning(sources[0], sourceTexts[0], w.line, w.column, w.message);
+    }
+    if (!ok)
+    {
+        for (const auto& err : sema.getErrors())
+        {
+            printError(sources[0], sourceTexts[0], err.line, err.column, err.message);
         }
         return false;
     }
 
-    // 代码生成
+    // 5) 代码生成
     CodeGenerator generator;
-    generator.generate(program.get());
+    generator.generate(merged.get());
 
-    if (!generator.verify()) {
-        std::cerr << filename << ": error: IR verification failed\n";
+    if (!generator.verify())
+    {
+        std::cerr << sources[0] << ": error: IR verification failed\n";
         return false;
     }
 
     // 可选保留 .ll
-    if (keepIntermediate) {
-        std::string llPath = withExtension(filename, ".ll");
+    if (keepIntermediate)
+    {
+        std::string llPath = withExtension(sources[0], ".ll");
         generator.saveToFile(llPath);
     }
 
-    if (!generator.emitObject(objPath)) {
-        std::cerr << filename << ": error: object generation failed\n";
+    if (!generator.emitObject(objPath))
+    {
+        std::cerr << sources[0] << ": error: object generation failed\n";
         return false;
     }
 
@@ -199,29 +375,6 @@ bool buildStaticLibrary(const std::vector<std::string>& objFiles,
     
     std::cout << "Creating static library: " << libName << std::endl;
     return std::system(cmd.c_str()) == 0;
-}
-
-// ===== 旧版 compileFile（保留兼容） =====
-bool compileFile(const std::string& filename, bool keepIntermediate) {
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << filename << ": error: cannot open file\n";
-        return false;
-    }
-
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string source = buffer.str();
-
-    // ...（词法、语法、语义分析同上，省略重复代码）...
-    // 为了简洁，这里直接调用 compileToObject + 链接
-    std::string objPath = withExtension(filename, ".o");
-    if (!compileToObject(filename, keepIntermediate, objPath)) {
-        return false;
-    }
-    
-    std::string exePath = withExtension(filename, "");
-    return linkExecutable({objPath}, exePath);
 }
 
 // ===== main 函数 =====
@@ -268,29 +421,22 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // 阶段1：编译所有源文件为 .o
-    std::vector<std::string> objFiles;
-    int index = 0;
-    for (const auto& src : sources) {
-        // 确定 .o 路径
-        std::string obj;
-        if (sources.size() == 1 && outputName.empty()) {
-            // 单个文件，用源文件同名
-            obj = withExtension(src, ".o");
-        } else if (!outputName.empty() && !compileOnly && !buildStatic) {
-            // 指定了 -o 且链接成可执行文件，用临时 .o
-            obj = "plangc_tmp_" + std::to_string(index++) + ".o";
-        } else {
-            // 默认：源文件同名 .o
-            obj = withExtension(src, ".o");
-        }
-        
-        std::cout << "compiling " << src << " -> " << obj << std::endl;
-        if (!compileToObject(src, keepIntermediate, obj)) {
-            return 1;
-        }
-        objFiles.push_back(obj);
+    // 阶段1：合并编译所有源文件为单个 .o（含 import 解析）
+    std::string obj;
+    if (compileOnly && !outputName.empty()) {
+        obj = outputName;
+    } else if (compileOnly && sources.size() == 1) {
+        obj = withExtension(sources[0], ".o");
+    } else {
+        obj = "plangc_tmp_0.o";
     }
+
+    std::cout << "compiling " << sources.size() << " file(s) -> " << obj << std::endl;
+    std::string stdlibRoot = getStdlibRoot(argv[0]);
+    if (!compileUnit(sources, keepIntermediate, obj, stdlibRoot)) {
+        return 1;
+    }
+    std::vector<std::string> objFiles = { obj };
     
     // 阶段2：根据模式处理
     if (compileOnly) {
