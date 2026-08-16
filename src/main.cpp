@@ -96,6 +96,10 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
     cmd = "g++ -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
     cmd += " -pthread";
+#elif defined(_WIN32)
+    // Windows：用 clang 驱动（自动处理 CRT 与入口），对象文件 .obj
+    cmd = "clang++ -o " + exePath;
+    for (const auto& obj : objFiles) cmd += " " + obj;
 #else
     std::cerr << "error: unsupported platform for linking\n";
     return false;
@@ -362,6 +366,13 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
     {
         std::cerr << sources[0] << ": error: IR verification failed\n";
         return false;
+    }
+
+    // 可选保留 .ll
+    if (keepIntermediate)
+    {
+        std::string llPath = withExtension(sources[0], ".ll");
+        generator.saveToFile(llPath);
     }
 
     // 可选保留 .ll
