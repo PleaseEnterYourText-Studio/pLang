@@ -711,9 +711,11 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
         paramTypes.push_back(getLLVMType(param->type.get()));
     }
 
-    llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
-    llvm::Function* func = llvm::Function::Create(
-        funcType, llvm::Function::ExternalLinkage, fn->name, module.get());
+    llvm::Function* func = module->getFunction(fn->name);
+    if (!func) {
+        llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+        func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn->name, module.get());
+    }
     currentFunction = func;
 
     llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(context, "entry", func);
