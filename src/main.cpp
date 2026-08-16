@@ -287,6 +287,27 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
         }
     }
 
+    // 1.5) 校验包名一致性：一个目录为一个包，同一编译单元的所有文件必须声明同一个包
+    std::string unitPackage;
+    for (size_t i = 0; i < programs.size(); ++i)
+    {
+        if (programs[i]->packageName.empty())
+        {
+            continue; // 缺少 package 声明由语义分析报错
+        }
+        if (unitPackage.empty())
+        {
+            unitPackage = programs[i]->packageName;
+        }
+        else if (programs[i]->packageName != unitPackage)
+        {
+            std::cerr << sources[i] << ": error: package '" << programs[i]->packageName
+                      << "' conflicts with package '" << unitPackage
+                      << "' in the same directory (one directory = one package)" << std::endl;
+            return false;
+        }
+    }
+
     // 2) 合并：以第一个文件为主程序，其余文件声明与 import 并入
     std::unique_ptr<ProgramNode> merged = std::move(programs[0]);
     for (size_t i = 1; i < programs.size(); ++i)
