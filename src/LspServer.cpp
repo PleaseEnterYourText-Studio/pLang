@@ -2,6 +2,7 @@
 #include "../include/Lexer.h"
 #include "../include/Parser.h"
 #include "../include/Sema.h"
+#include "../include/Importer.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -122,13 +123,22 @@ void LspServer::analyzeDocument(DocumentState& doc)
     // 即使语法错误，也尽量收集已解析的部分符号（保证高亮不退化）
     if (doc.program)
     {
+        // 解析 import：合并标准库声明（编辑器内库函数可用）
+        size_t ownDeclCount = doc.program->decls.size();
+        bool importError = false;
+        plangResolveImports(doc.program.get(), plangGetStdlibRoot(""), importError);
+
         Sema sema;
         if (!sema.analyze(doc.program))
         {
             doc.errors = sema.getErrors();
         }
         doc.warnings = sema.getWarnings();
-        collectSymbols(doc, doc.program.get());
+        // 大纲只收集本文件声明的符号
+        for (size_t i = 0; i < ownDeclCount; ++i)
+        {
+            collectSymbols(doc, doc.program->decls[i].get());
+        }
         doc.parsed = true;
     }
     else

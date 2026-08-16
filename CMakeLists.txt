@@ -108,12 +108,14 @@ add_executable(lsp-server
     include/Sema.h
     include/SymbolTable.h
     include/token.h
+    include/Importer.h
     src/LspServer.cpp
     src/Lexer.cpp
     src/AST.cpp
     src/Parser.cpp
     src/Sema.cpp
     src/SymbolTable.cpp
+    src/Importer.cpp
 )
 
 target_include_directories(lsp-server PRIVATE
