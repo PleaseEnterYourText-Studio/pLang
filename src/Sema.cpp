@@ -885,7 +885,13 @@ std::string Sema::visitThreadCall(FunctionCallNode* node)
     // thread.spawn(fn)：启动线程运行无参函数，返回线程句柄（pointer）
     if (full == "thread.spawn")
     {
-        if (!checkArgCount(1)) return "";
+        // 一参：无参函数；两参：带一个指针参数的共享内存线程
+        if (argCount < 1 || argCount > 2)
+        {
+            error(node->line, node->column,
+                  "thread.spawn expects 1 argument (function) or 2 (function, shared pointer)");
+            return "";
+        }
         auto* ref = dynamic_cast<VariableRefNode*>(node->arguments[0].get());
         std::string fnName = ref ? ref->name : "";
         if (fnName.empty() || fnName.find('.') != std::string::npos)
@@ -899,7 +905,24 @@ std::string Sema::visitThreadCall(FunctionCallNode* node)
             error(node->line, node->column, "thread.spawn expects a function name, got '" + fnName + "'");
             return "";
         }
-        if (!fnSym->paramTypes.empty())
+        if (argCount == 2)
+        {
+            // 共享内存：目标函数必须恰好一个指针参数，第二参数为指针
+            if (fnSym->paramTypes.size() != 1)
+            {
+                error(node->line, node->column,
+                      "thread.spawn shared function '" + fnName + "' must take exactly 1 pointer parameter");
+                return "";
+            }
+            std::string argType = visitExpr(node->arguments[1].get());
+            if (argType != "pointer" && argType != "ptr")
+            {
+                error(node->line, node->column,
+                      "thread.spawn second argument must be a pointer, got '" + argType + "'");
+                return "";
+            }
+        }
+        else if (!fnSym->paramTypes.empty())
         {
             error(node->line, node->column,
                   "thread.spawn function '" + fnName + "' must not take parameters");

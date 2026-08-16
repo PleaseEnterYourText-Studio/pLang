@@ -3,6 +3,7 @@ import std.vector;
 import std.string;
 import std.thread;
 import std.io;
+import std.atomic;
 import std.mem;
 
 /* 块注释 */
@@ -33,6 +34,16 @@ func add(val: int a, val: int b) : int {
 func useMoved(val: string s) : int {
     var: string copy = s;
     return 1;
+}
+
+// 共享内存线程：原子累加计数器 1000 次
+func sharedWorker(var -> var: int counter) : int {
+    var: int si = 0;
+    while (si < 1000) {
+        atomic.add(counter, 1);
+        si = si + 1;
+    }
+    return 0;
 }
 
 // 线程入口：CPU 密集计算
@@ -158,6 +169,16 @@ func main() : int {
 
     // 万能格式化（变参 printf）
     io.printf("%s %d %x\n", "printf", 42, 255);
+
+    // 并发共享状态：两线程原子累加共享计数器
+    var: int sharedCounter = 0;
+    var -> var: int scp = &sharedCounter;
+    var -> var: ptr st1 = thread.spawn(sharedWorker, scp);
+    var -> var: ptr st2 = thread.spawn(sharedWorker, scp);
+    thread.join(st1);
+    thread.join(st2);
+    io.printInt(sharedCounter);
+    io.println("");
 
     // 堆内存：分配 4 个 int，写入并释放
     var -> var: int hp = mem.malloc(16);

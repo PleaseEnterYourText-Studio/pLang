@@ -19,9 +19,34 @@
 | 函数 | 说明 |
 |------|------|
 | `thread.spawn(fn)` | 启动一个新线程运行**无参函数** `fn`，返回线程句柄（`var -> var: ptr`） |
+| `thread.spawn(fn, p)` | 启动线程运行**带一个指针参数**的函数，`p` 为共享数据指针（多线程共享同一内存） |
 | `thread.join(t)` | 阻塞等待线程 `t` 结束 |
 
-- 线程入口必须是无参函数，返回值被忽略。
+- 线程入口必须是无参函数，或（共享内存模式）恰好一个指针参数；返回值被忽略。
+- 共享内存配合 `std.atomic` 使用，避免数据竞争：
+
+```plang
+func worker(var -> var: int counter) : int {
+    var: int i = 0;
+    while (i < 1000) {
+        atomic.add(counter, 1);
+        i = i + 1;
+    }
+    return 0;
+}
+
+func main() : int {
+    var: int counter = 0;
+    var -> var: int p = &counter;
+    var -> var: ptr t1 = thread.spawn(worker, p);
+    var -> var: ptr t2 = thread.spawn(worker, p);
+    thread.join(t1);
+    thread.join(t2);
+    io.printInt(counter);   // 2000
+    io.println("");
+    return 0;
+}
+```
 - `join` 前线程与主线程并行执行；程序退出前应 `join` 所有已 spawn 的线程。
 
 ## 互斥锁

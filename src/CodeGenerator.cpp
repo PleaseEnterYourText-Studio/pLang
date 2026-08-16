@@ -1457,9 +1457,9 @@ llvm::Value* CodeGenerator::generateThreadBuiltin(FunctionCallNode* call)
     // thread.spawn(fn)：启动线程运行无参函数 fn，返回线程句柄（pointer）
     if (name == "thread.spawn")
     {
-        if (call->arguments.size() != 1)
+        if (call->arguments.size() < 1 || call->arguments.size() > 2)
         {
-            std::cerr << "Error: thread.spawn expects 1 argument" << std::endl;
+            std::cerr << "Error: thread.spawn expects 1 or 2 arguments" << std::endl;
             return nullPtr;
         }
         auto* ref = dynamic_cast<VariableRefNode*>(call->arguments[0].get());
@@ -1486,16 +1486,31 @@ llvm::Value* CodeGenerator::generateThreadBuiltin(FunctionCallNode* call)
 
         llvm::BasicBlock* trampEntry = llvm::BasicBlock::Create(context, "entry", tramp);
         builder.SetInsertPoint(trampEntry);
-        builder.CreateCall(target, {});
+        // 共享内存线程：把参数转发给目标函数
+        if (target->arg_size() > 0)
+        {
+            builder.CreateCall(target, {tramp->arg_begin()});
+        }
+        else
+        {
+            builder.CreateCall(target, {});
+        }
         builder.CreateRet(nullPtr);
 
         builder.SetInsertPoint(savedBlock, savedPoint);
 
-        // pthread_create(&handle, nullptr, trampoline, nullptr)
+        // 共享指针（第二参数）作为 pthread_create 的 arg
+        llvm::Value* sharedArg = nullPtr;
+        if (call->arguments.size() == 2)
+        {
+            sharedArg = generateExpression(call->arguments[1].get());
+            if (!sharedArg) sharedArg = nullPtr;
+        }
+        // pthread_create(&handle, nullptr, trampoline, sharedArg)
         llvm::Function* pthreadCreate = getOrDeclareFunction(
             "pthread_create", llvm::Type::getInt32Ty(context), {ptrTy, ptrTy, ptrTy, ptrTy});
         llvm::AllocaInst* handle = builder.CreateAlloca(ptrTy, nullptr, "threadHandle");
-        builder.CreateCall(pthreadCreate, {handle, nullPtr, builder.CreateBitCast(tramp, ptrTy), nullPtr});
+        builder.CreateCall(pthreadCreate, {handle, nullPtr, builder.CreateBitCast(tramp, ptrTy), sharedArg});
         return builder.CreateLoad(ptrTy, handle, "threadId");
     }
 
