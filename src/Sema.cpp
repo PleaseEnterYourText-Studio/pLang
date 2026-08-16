@@ -21,6 +21,8 @@ bool Sema::analyze(std::unique_ptr<ProgramNode>& program)
     arrayElementTypes.clear();
     pointerElementTypes.clear();
     structRegistry.clear();
+    genericTemplates.clear();
+    currentProgram = program.get();
     visitProgram(program.get());
     return errors.empty();
 }
@@ -108,7 +110,14 @@ void Sema::visitProgram(ProgramNode* node)
                     }
                 }
             }
-            structRegistry[structNode->name] = std::move(info);
+            if (!structNode->typeParams.empty())
+            {
+                genericTemplates[structNode->name] = structNode; // 泛型模板（不注册具体类型）
+            }
+            else
+            {
+                structRegistry[structNode->name] = std::move(info);
+            }
         }
         else if (decl->type == ASTNodeType::USING_DECL)
         {
@@ -155,7 +164,14 @@ void Sema::visitProgram(ProgramNode* node)
                                                    std::move(pt) };
                     }
                 }
-                structRegistry[structNode->name] = std::move(info);
+                if (!structNode->typeParams.empty())
+                {
+                    genericTemplates[structNode->name] = structNode; // 泛型模板
+                }
+                else
+                {
+                    structRegistry[structNode->name] = std::move(info);
+                }
             }
         }
         else if (decl->type == ASTNodeType::EXTERN_VAR_DECL)
@@ -233,6 +249,10 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     // 参数
     for (auto& param : node->params)
     {
+        if (param->type && param->type->baseType == ASTNodeType::TYPE_PRIMITIVE)
+        {
+            tryResolveGenericType(param->type->name);
+        }
         if (param->type)
         {
             // 记录指针参数指向类型（buf[i] 用）
@@ -317,7 +337,10 @@ void Sema::visitStructDecl(StructDeclNode* node)
                 }
                 else if (varNode->type->baseType == ASTNodeType::TYPE_PRIMITIVE && !typeName.empty())
                 {
-                    if (!isBuiltinType(typeName))
+                    // 泛型参数（T）跳过
+                    bool isTypeParam = false;
+                    for (auto& tp : node->typeParams) if (tp == typeName) isTypeParam = true;
+                    if (!isTypeParam && !isBuiltinType(typeName))
                     {
                     auto typeSym = symbols.lookup(typeName);
                     if (!typeSym || typeSym->kind != SymbolKind::STRUCT)
@@ -406,6 +429,106 @@ void Sema::visitStmt(ASTNode* node)
     }
 }
 
+// ===== 泛型实例化 =====
+
+std::unique_ptr<TypeNode> Sema::substituteType(TypeNode* t,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    if (!t) return nullptr;
+    if (t->baseType == ASTNodeType::TYPE_PRIMITIVE)
+    {
+        for (size_t i = 0; i < params.size(); ++i)
+        {
+            if (t->name == params[i])
+            {
+                return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, args[i],
+                                                  t->line, t->column);
+            }
+        }
+        return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, t->name, t->line, t->column);
+    }
+    if (t->baseType == ASTNodeType::TYPE_POINTER || t->baseType == ASTNodeType::TYPE_ARRAY)
+    {
+        auto inner = substituteType(t->inner.get(), params, args);
+        return std::make_unique<TypeNode>(t->baseType, "", t->line, t->column,
+                                          t->arraySize, std::move(inner), t->isConst);
+    }
+    return std::make_unique<TypeNode>(t->baseType, t->name, t->line, t->column,
+                                      t->arraySize, nullptr, t->isConst);
+}
+
+void Sema::instantiateGeneric(const std::string& mangled)
+{
+    if (structRegistry.count(mangled)) return; // 已实例化
+    size_t lt = mangled.find('<');
+    if (lt == std::string::npos) return;
+    std::string base = mangled.substr(0, lt);
+    auto tIt = genericTemplates.find(base);
+    if (tIt == genericTemplates.end()) return;
+    StructDeclNode* tmpl = tIt->second;
+
+    std::string argStr = mangled.substr(lt + 1, mangled.rfind('>') - lt - 1);
+    std::vector<std::string> args;
+    size_t pos = 0;
+    while (pos <= argStr.size())
+    {
+        size_t comma = argStr.find(',', pos);
+        std::string a = (comma == std::string::npos) ? argStr.substr(pos) : argStr.substr(pos, comma - pos);
+        while (!a.empty() && a.front() == ' ') a = a.substr(1);
+        while (!a.empty() && a.back() == ' ') a.pop_back();
+        if (!a.empty()) args.push_back(a);
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    if (args.size() != tmpl->typeParams.size()) return;
+
+    auto clone = std::make_unique<StructDeclNode>(mangled, tmpl->isAbstract, tmpl->line, tmpl->column);
+    clone->isUnion = tmpl->isUnion;
+    clone->alignBytes = tmpl->alignBytes;
+    clone->bases = tmpl->bases;
+    for (auto& m : tmpl->members)
+    {
+        if (m->type == ASTNodeType::VARIABLE_DECL)
+        {
+            auto* f = dynamic_cast<VariableDeclNode*>(m.get());
+            auto nt = f->type ? substituteType(f->type.get(), tmpl->typeParams, args) : nullptr;
+            clone->members.push_back(std::make_unique<VariableDeclNode>(
+                f->isVar, f->isMoved, f->name, std::move(nt), nullptr,
+                f->line, f->column, f->bitWidth, f->isVolatile));
+        }
+    }
+
+    auto sym = std::make_shared<Symbol>(mangled, SymbolKind::STRUCT, SymbolMutability::VAL,
+                                        "type", (int)mangled.size(), 0);
+    symbols.declare(mangled, sym);
+    StructInfo info;
+    for (auto& m : clone->members)
+    {
+        if (m->type == ASTNodeType::VARIABLE_DECL)
+        {
+            auto* f = dynamic_cast<VariableDeclNode*>(m.get());
+            if (f->type)
+            {
+                info.fields.emplace_back(f->name, typeNodeToName(f->type.get()));
+                if (f->type->baseType == ASTNodeType::TYPE_ARRAY && f->type->inner)
+                {
+                    info.fieldElementTypes[f->name] = typeNodeToName(f->type->inner.get());
+                }
+            }
+        }
+    }
+    structRegistry[mangled] = std::move(info);
+
+    if (currentProgram) currentProgram->decls.push_back(std::move(clone));
+}
+
+bool Sema::tryResolveGenericType(const std::string& name)
+{
+    if (name.find('<') == std::string::npos) return true;
+    instantiateGeneric(name);
+    return structRegistry.count(name) > 0;
+}
+
 void Sema::visitBlock(BlockStmtNode* node)
 {
     symbols.pushScope();
@@ -439,6 +562,7 @@ void Sema::visitVarDecl(VariableDeclNode* node)
         {
             if (!isBuiltinType(declaredType))
             {
+                tryResolveGenericType(declaredType); // 泛型实例化（如 Box<int>）
                 auto typeSym = symbols.lookup(declaredType);
                 if (!typeSym || typeSym->kind != SymbolKind::STRUCT)
                 {

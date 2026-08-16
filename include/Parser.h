@@ -20,6 +20,7 @@ class Parser
 private:
     std::vector<Token> tokens;
     std::vector<ParserError> errors;
+    bool genericPendingGT = false;  // 嵌套泛型 >> 拆出的虚拟 '>'
     size_t pos;
     int errorLine = 0;
     int errorColumn = 0;

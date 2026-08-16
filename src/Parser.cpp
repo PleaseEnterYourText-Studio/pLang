@@ -11,6 +11,7 @@ Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)), pos(0) {}
 std::unique_ptr<ProgramNode> Parser::parse()
 {
     auto program = std::make_unique<ProgramNode>();
+    genericPendingGT = false;
 
     // package 声明（可选但应在前）
     if (match(TokenType::PACKAGE))
@@ -158,9 +159,64 @@ std::unique_ptr<TypeNode> Parser::parseType()
 }
 
 // 类型（不含 var/val 修饰符前缀）
+// 类型节点的文本形式（泛型参数名拼接用）
+static std::string typeNodeText(TypeNode* t)
+{
+    if (!t) return "";
+    switch (t->baseType)
+    {
+        case ASTNodeType::TYPE_I8: return "i8";
+        case ASTNodeType::TYPE_I16: return "i16";
+        case ASTNodeType::TYPE_I32: return "int";
+        case ASTNodeType::TYPE_I64: return "i64";
+        case ASTNodeType::TYPE_U8: return "u8";
+        case ASTNodeType::TYPE_U16: return "u16";
+        case ASTNodeType::TYPE_U32: return "uint";
+        case ASTNodeType::TYPE_U64: return "u64";
+        case ASTNodeType::TYPE_F32: return "f32";
+        case ASTNodeType::TYPE_F64: return "f64";
+        case ASTNodeType::TYPE_CHAR: return "char";
+        case ASTNodeType::TYPE_BOOL: return "bool";
+        case ASTNodeType::TYPE_STRING: return "string";
+        case ASTNodeType::TYPE_POINTER: return "var -> var: " + typeNodeText(t->inner.get());
+        case ASTNodeType::TYPE_ARRAY: return typeNodeText(t->inner.get()) + "[" + std::to_string(t->arraySize) + "]";
+        default: return t->name;
+    }
+}
+
 std::unique_ptr<TypeNode> Parser::parseTypeSuffix()
 {
     auto typeNode = parsePrimitiveType();
+
+    // 泛型实例化 Name<T1, T2>
+    if (typeNode->baseType == ASTNodeType::TYPE_PRIMITIVE && check(TokenType::LT))
+    {
+        std::string gname = typeNode->name + "<";
+        advance(); // <
+        do
+        {
+            auto argTy = parseTypeSuffix();
+            gname += typeNodeText(argTy.get());
+            if (check(TokenType::COMMA)) gname += ",";
+        } while (match(TokenType::COMMA));
+        // 期望 >（嵌套泛型的 >> 会被词法拆成 SHR，这里拆回两个 >）
+        if (genericPendingGT)
+        {
+            genericPendingGT = false;
+        }
+        else if (match(TokenType::GT)) { /* 已消费 */ }
+        else if (match(TokenType::SHR))
+        {
+            genericPendingGT = true; // 剩下半个 > 留给外层
+        }
+        else
+        {
+            expect(TokenType::GT, "expected > to close generic arguments");
+        }
+        gname += ">";
+        typeNode = std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, gname,
+                                              typeNode->line, typeNode->column);
+    }
 
     // 后缀数组 T[n]
     while (match(TokenType::LBRACKET))
@@ -505,7 +561,7 @@ std::unique_ptr<ASTNode> Parser::parseStructDecl(bool allowAnonymous)
     // 泛型 <T: type>
     if (match(TokenType::LT))
     {
-        parseTypeParams();
+        structNode->typeParams = parseTypeParams();
     }
 
     // 继承 : pub A, B

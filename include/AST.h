@@ -517,6 +517,7 @@ struct StructDeclNode : ASTNode
     bool isAbstract;
     bool isUnion;               // union：所有成员共享同一内存
     int alignBytes;             // 对齐（0=默认）
+    std::vector<std::string> typeParams;  // 泛型参数（如 <T: type> 的 T）
     std::vector<std::string> bases;
     std::vector<std::unique_ptr<ASTNode>> members;
 

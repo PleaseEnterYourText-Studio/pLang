@@ -52,6 +52,12 @@ private:
         std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>> methods;
     };
     std::unordered_map<std::string, StructInfo> structRegistry;
+    std::unordered_map<std::string, StructDeclNode*> genericTemplates;  // 泛型模板（名字 → 原声明）
+    ProgramNode* currentProgram = nullptr;                              // 实例化注入用
+    void instantiateGeneric(const std::string& mangledName);            // 泛型实例化（克隆+替换+注入）
+    bool tryResolveGenericType(const std::string& name);                // 名字含 < 时尝试实例化
+    std::unique_ptr<TypeNode> substituteType(TypeNode* t,
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
     std::set<std::string> functionLabels;   // 当前函数的 label 集合
     std::string currentStruct;              // 当前方法所属结构体（空=自由函数）
     std::set<std::string> duplicateLabels;  // 重复 label 检测
