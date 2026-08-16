@@ -33,6 +33,7 @@ private:
         llvm::Type* type;
     };
     std::unordered_map<std::string, VarInfo> namedValues;
+    std::unordered_map<std::string, llvm::Type*> namedValueElementTypes;  // 指针变量/参数 → 指向类型
 
     // std.thread 内置支持
     int mutexSlotCount = 0;             // 已分配的互斥锁槽位数（池上限 64）
@@ -46,6 +47,9 @@ private:
     llvm::Value* generateExpression(ASTNode* node);
     void generateStatement(ASTNode* node);
     void generateFunction(FunctionDeclNode* fn);
+
+    // 数组/指针下标 buf[i]：计算元素地址并返回元素类型
+    llvm::Value* getIndexedAddress(IndexNode* node, llvm::Type*& elemType);
 
     // std.thread 内置调用生成
     llvm::Value* generateThreadBuiltin(FunctionCallNode* call);

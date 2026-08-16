@@ -40,6 +40,8 @@ private:
     std::string currentFunctionName;    // 当前函数名
     std::string currentPackage;         // 当前分析的函数所属包（可见性检查用）
     std::set<std::string> importedModules;  // 已导入的标准库模块（如 "std.thread"）
+    std::unordered_map<std::string, std::string> arrayElementTypes;    // 数组变量 → 元素类型
+    std::unordered_map<std::string, std::string> pointerElementTypes;  // 指针变量/参数 → 指向类型
 
 public:
     bool analyze(std::unique_ptr<ProgramNode>& program);
@@ -80,6 +82,7 @@ private:
     std::string visitLiteralString(LiteralStringNode* node);
     std::string visitLiteralBool(LiteralBoolNode* node);
     std::string visitVariableRef(VariableRefNode* node);
+    std::string visitIndex(IndexNode* node);    // 数组下标 buf[i]
     std::string visitAssignment(AssignmentNode* node);
 
     // 类型工具

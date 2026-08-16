@@ -1085,6 +1085,13 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
                 : member.text;
             expr = std::make_unique<VariableRefNode>(full, member.line, member.column);
         }
+        else if (match(TokenType::LBRACKET))
+        {
+            // 数组下标 buf[i]
+            auto index = parseExpression();
+            expect(TokenType::RBRACKET, "expected ]");
+            expr = std::make_unique<IndexNode>(std::move(expr), std::move(index), index->line, index->column);
+        }
         else if (match(TokenType::LPAREN))
         {
             // 函数调用

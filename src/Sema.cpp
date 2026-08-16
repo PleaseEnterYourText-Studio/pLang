@@ -18,6 +18,8 @@ bool Sema::analyze(std::unique_ptr<ProgramNode>& program)
 {
     errors.clear();
     warnings.clear();
+    arrayElementTypes.clear();
+    pointerElementTypes.clear();
     visitProgram(program.get());
     return errors.empty();
 }
@@ -155,6 +157,11 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     {
         if (param->type)
         {
+            // 记录指针参数指向类型（buf[i] 用）
+            if (param->type->baseType == ASTNodeType::TYPE_POINTER && param->type->inner)
+            {
+                pointerElementTypes[param->name] = typeNodeToName(param->type->inner.get());
+            }
             auto sym = std::make_shared<Symbol>(param->name, SymbolKind::PARAMETER,
                                                 param->isVar ? SymbolMutability::VAR : SymbolMutability::VAL,
                                                 typeNodeToName(param->type.get()),
@@ -299,6 +306,17 @@ void Sema::visitVarDecl(VariableDeclNode* node)
     if (node->type)
     {
         declaredType = typeNodeToName(node->type.get());
+
+        // 记录数组元素类型（buf[i] 用）
+        if (node->type->baseType == ASTNodeType::TYPE_ARRAY && node->type->inner)
+        {
+            arrayElementTypes[node->name] = typeNodeToName(node->type->inner.get());
+        }
+        // 记录指针指向类型（buf[i] 用）
+        if (node->type->baseType == ASTNodeType::TYPE_POINTER && node->type->inner)
+        {
+            pointerElementTypes[node->name] = typeNodeToName(node->type->inner.get());
+        }
 
         // 检查用户自定义类型（IDENT）是否已定义
         if (node->type->baseType == ASTNodeType::TYPE_PRIMITIVE && !declaredType.empty())
@@ -446,6 +464,7 @@ std::string Sema::visitExpr(ASTNode* node)
         case ASTNodeType::LITERAL_BOOL: return visitLiteralBool(dynamic_cast<LiteralBoolNode*>(node));
         case ASTNodeType::LITERAL_NULL: return "pointer";
         case ASTNodeType::VARIABLE_REF: return visitVariableRef(dynamic_cast<VariableRefNode*>(node));
+        case ASTNodeType::INDEX: return visitIndex(dynamic_cast<IndexNode*>(node));
         case ASTNodeType::ASSIGNMENT_STMT: return visitAssignment(dynamic_cast<AssignmentNode*>(node));
         case ASTNodeType::CAST:
         {
@@ -742,6 +761,44 @@ std::string Sema::visitVariableRef(VariableRefNode* node)
     return sym->typeName;
 }
 
+std::string Sema::visitIndex(IndexNode* node)
+{
+    // 数组下标 buf[i]：支持数组变量与指针变量（含参数）
+    std::string elemType;
+    if (node->operand->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = dynamic_cast<VariableRefNode*>(node->operand.get());
+        auto aIt = arrayElementTypes.find(ref->name);
+        auto pIt = pointerElementTypes.find(ref->name);
+        if (aIt != arrayElementTypes.end())
+        {
+            elemType = aIt->second;
+        }
+        else if (pIt != pointerElementTypes.end())
+        {
+            elemType = pIt->second;
+        }
+        else
+        {
+            auto sym = symbols.lookup(ref->name);
+            error(node->line, node->column,
+                  sym ? "variable '" + ref->name + "' is not an array or pointer"
+                      : "undefined variable '" + ref->name + "'");
+        }
+    }
+    else
+    {
+        error(node->line, node->column, "indexing requires an array or pointer variable");
+    }
+
+    std::string idxType = visitExpr(node->index.get());
+    if (!idxType.empty() && !isNumericType(idxType))
+    {
+        error(node->line, node->column, "array index must be an integer, got '" + idxType + "'");
+    }
+    return elemType;
+}
+
 std::string Sema::visitAssignment(AssignmentNode* node)
 {
     std::string targetType = visitExpr(node->target.get());
@@ -805,7 +862,7 @@ bool Sema::isNumericType(const std::string& type) const
 {
     return type == "int" || type == "i8" || type == "i16" || type == "i64" ||
            type == "uint" || type == "u8" || type == "u16" || type == "u64" ||
-           type == "f32" || type == "f64";
+           type == "f32" || type == "f64" || type == "char"; // char 即 u8
 }
 
 bool Sema::isBuiltinType(const std::string& type) const

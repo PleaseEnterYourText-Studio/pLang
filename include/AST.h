@@ -51,6 +51,7 @@ enum class ASTNodeType
     MEMBER_ACCESS,
     ADDRESS_OF,
     DEREF,
+    INDEX,
     STRUCT_INIT,
     SIZEOF_EXPR,
     ASM_STMT,
@@ -214,6 +215,17 @@ struct AddressOfNode : ASTNode
 
     explicit AddressOfNode(std::unique_ptr<ASTNode> operand, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::UNARY_OP, line, column), operand(std::move(operand)) {}
+};
+
+// 数组下标节点 buf[i]
+struct IndexNode : ASTNode
+{
+    std::unique_ptr<ASTNode> operand;   // 数组/指针变量
+    std::unique_ptr<ASTNode> index;     // 下标表达式
+
+    IndexNode(std::unique_ptr<ASTNode> operand, std::unique_ptr<ASTNode> index, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::INDEX, line, column),
+          operand(std::move(operand)), index(std::move(index)) {}
 };
 
 // 类型转换节点

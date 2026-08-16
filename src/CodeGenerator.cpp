@@ -151,6 +151,17 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             return getVariable(ref->name);
         }
 
+        case ASTNodeType::INDEX: {
+            auto* idxNode = static_cast<IndexNode*>(node);
+            llvm::Type* elemType = nullptr;
+            llvm::Value* elemPtr = getIndexedAddress(idxNode, elemType);
+            if (elemPtr && elemType) {
+                return builder.CreateLoad(elemType, elemPtr, "elem");
+            }
+            std::cerr << "Error: invalid array index expression" << std::endl;
+            return nullptr;
+        }
+
         case ASTNodeType::BINARY_OP: {
             auto* bin = static_cast<BinaryOpNode*>(node);
             auto* left = generateExpression(bin->lift.get());
@@ -358,6 +369,10 @@ void CodeGenerator::generateStatement(ASTNode* node)
             llvm::Type* varType = getLLVMType(ASTNodeType::TYPE_I32);
             if (decl->type) {
                 varType = getLLVMType(decl->type.get());
+                // 记录指针变量指向类型（buf[i] 用）
+                if (decl->type->baseType == ASTNodeType::TYPE_POINTER && decl->type->inner) {
+                    namedValueElementTypes[decl->name] = getLLVMType(decl->type->inner.get());
+                }
             }
 
             llvm::AllocaInst* alloca = builder.CreateAlloca(varType, nullptr, decl->name);
@@ -390,11 +405,19 @@ void CodeGenerator::generateStatement(ASTNode* node)
                     varPtr = generateExpression(unary->operand.get());
                     varType = llvm::Type::getInt32Ty(context);
                 }
+            } else if (assign->target->type == ASTNodeType::INDEX) {
+                // 数组下标赋值 buf[i] = v
+                auto* idxNode = static_cast<IndexNode*>(assign->target.get());
+                varPtr = getIndexedAddress(idxNode, varType);
             }
 
             if (varPtr) {
                 llvm::Value* val = generateExpression(assign->value.get());
                 if (val) {
+                    // 值类型与元素类型不一致（如 char 元素存 int）时按元素类型转换
+                    if (val->getType() != varType && varType->isIntegerTy() && val->getType()->isIntegerTy()) {
+                        val = builder.CreateIntCast(val, varType, true, "storeCast");
+                    }
                     builder.CreateStore(val, varPtr);
                 }
             }
@@ -622,6 +645,10 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
             llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, param->name);
             builder.CreateStore(&arg, alloca);
             namedValues[param->name] = VarInfo{alloca, arg.getType()};
+            // 记录指针参数指向类型（buf[i] 用）
+            if (param->type && param->type->baseType == ASTNodeType::TYPE_POINTER && param->type->inner) {
+                namedValueElementTypes[param->name] = getLLVMType(param->type->inner.get());
+            }
         }
         ++idx;
     }
@@ -797,6 +824,39 @@ llvm::Type* CodeGenerator::unifyOperands(llvm::Value*& left, llvm::Value*& right
 
     return nullptr;
 }
+
+// 数组/指针下标 buf[i]：计算元素地址并输出元素类型
+llvm::Value* CodeGenerator::getIndexedAddress(IndexNode* node, llvm::Type*& elemType)
+{
+    elemType = nullptr;
+    if (node->operand->type != ASTNodeType::VARIABLE_REF) {
+        return nullptr;
+    }
+    auto* ref = static_cast<VariableRefNode*>(node->operand.get());
+    auto it = namedValues.find(ref->name);
+    if (it == namedValues.end()) {
+        return nullptr;
+    }
+    llvm::Value* idx = generateExpression(node->index.get());
+    if (!idx) return nullptr;
+    idx = builder.CreateIntCast(idx, llvm::Type::getInt64Ty(context), true, "idx");
+
+    if (it->second.type->isArrayTy()) {
+        // 数组变量：GEP 从 alloca 起 [0][i]
+        elemType = it->second.type->getArrayElementType();
+        return builder.CreateGEP(it->second.type, it->second.ptr,
+                                 {builder.getInt64(0), idx}, "elemPtr");
+    }
+    // 指针变量/参数：先取指针值，再 GEP [i]
+    auto eIt = namedValueElementTypes.find(ref->name);
+    if (eIt != namedValueElementTypes.end()) {
+        elemType = eIt->second;
+        llvm::Value* base = builder.CreateLoad(it->second.type, it->second.ptr, ref->name);
+        return builder.CreateGEP(elemType, base, {idx}, "elemPtr");
+    }
+    return nullptr;
+}
+
 
 // std.thread 编译器内置支持
 
