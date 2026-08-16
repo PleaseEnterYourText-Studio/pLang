@@ -162,3 +162,37 @@ a+b = 42
 - `printFloat`：固定 6 位小数，四舍五入。
 - 字符串支持转义：`\n` `\t` `\r` `\\` `\"` `\0`。
 - LSP 暂不做 import 解析，编辑器中 `thread.join` 等库函数会显示"未知函数"（编译器编译不受影响）。
+
+---
+
+# std.mem 堆内存
+
+extern 直通 libc 分配器，配合指针算术使用。
+
+| 函数 | 说明 |
+|------|------|
+| `mem.malloc(n)` | 分配 `n` 字节，返回指针（失败返回 `null`） |
+| `mem.free(p)` | 释放内存 |
+| `mem.memcpy(dst, src, n)` | 复制 `n` 字节 |
+| `mem.memset(dst, value, n)` | 将 `n` 字节设为 `value` |
+| `mem.memcmp(a, b, n)` | 比较 `n` 字节，返回 0/负数/正数 |
+
+示例：
+
+```plang
+import std.io;
+import std.mem;
+
+func main() : int {
+    var -> var: int p = mem.malloc(16);   // 4 个 int
+    if (p == null) return 1;
+    p[0] = 10;
+    p[1] = 20;
+    io.printInt(p[0] + p[1]);   // 30
+    io.println("");
+    mem.free(p);
+    return 0;
+}
+```
+
+> 注意：`n` 为字节数；按元素访问需自行乘元素大小（`int` 为 4 字节）。

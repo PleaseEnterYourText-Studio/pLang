@@ -3,6 +3,7 @@ import std.vector;
 import std.string;
 import std.thread;
 import std.io;
+import std.mem;
 
 /* 块注释 */
 // 行注释
@@ -154,6 +155,16 @@ func main() : int {
     io.printChar('!');
     io.println("");
     io.flush();
+
+    // 堆内存：分配 4 个 int，写入并释放
+    var -> var: int hp = mem.malloc(16);
+    if (hp != null) {
+        hp[0] = 1;
+        hp[1] = 2;
+        io.printInt(hp[0] + hp[1]);
+        io.println("");
+        mem.free(hp);
+    }
 
     return 82;
 }

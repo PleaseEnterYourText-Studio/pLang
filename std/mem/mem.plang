@@ -1,0 +1,10 @@
+package std.mem;
+
+// PLang 标准库：堆内存管理。extern 直通 libc 分配器。
+// 用法：var -> var: int p = mem.malloc(4 * n); p[i] = ...; mem.free(p);
+
+pub extern func malloc(val: i64 n) -> var: ptr;
+pub extern func free(var -> var: ptr p);
+pub extern func memcpy(var -> var: ptr dst, var -> var: ptr src, val: i64 n) -> var: ptr;
+pub extern func memset(var -> var: ptr dst, val: int value, val: i64 n) -> var: ptr;
+pub extern func memcmp(var -> var: ptr a, var -> var: ptr b, val: i64 n) : int;
