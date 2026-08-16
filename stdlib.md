@@ -1,6 +1,7 @@
 # PLang 标准库
 
-标准库是真正的源码库，位于 `std/` 目录。`import` 后由编译器解析包源码并合并编译，
+标准库是真正的源码库，位于 `std/` 目录。`import` 后编译器对库包做**独立编译**：
+函数注入 extern 声明（定义留在库包 `.o`）、结构体合并进用户程序、链接时把库包 `.o` 一起链接。
 `pub` 函数可跨包调用（如 `io.print(...)`、`thread.join(...)`）。
 
 ## 总览
@@ -9,6 +10,10 @@
 |----|---------|------|
 | `std.thread` | `import std.thread;` | 多线程：线程创建/等待、互斥锁、休眠、让出 CPU |
 | `std.io` | `import std.io;` | 标准输入输出：打印、读输入、数字格式化 |
+| `std.mem` | `import std.mem;` | 堆内存：malloc/free、memcpy/memset/memcmp |
+| `std.atomic` | `import std.atomic;` | 原子操作：load/store/add/exchange/cas + 内存序 |
+| `std.option` | `import std.option;` | null 安全：`Option<T>` 泛型结构体 |
+| `std.result` | `import std.result;` | 错误处理：`Result<T, E>` 泛型结构体 |
 
 ---
 
@@ -186,7 +191,7 @@ a+b = 42
 - `readInt`：非数字输入返回 0。
 - `printFloat`：固定 6 位小数，四舍五入。
 - 字符串支持转义：`\n` `\t` `\r` `\\` `\"` `\0`。
-- LSP 暂不做 import 解析，编辑器中 `thread.join` 等库函数会显示"未知函数"（编译器编译不受影响）。
+- LSP 已支持 import 解析：编辑器中 `thread.join` 等库函数可正常悬停/补全/跳转。
 
 ---
 
@@ -276,3 +281,65 @@ volatile var: int flag = 0;
 flag = 1;          // volatile store
 var: int v = flag; // volatile load
 ```
+
+---
+
+# std.option 可选值（null 安全基础）
+
+`Option<T>` 是泛型结构体，表示"可能有值，也可能没有"。用于替代裸指针/`null`，避免空引用错误。
+需要 `import std.option;`。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `isSome` | `bool` | 是否包含值 |
+| `value` | `T` | 值（`isSome=false` 时无效） |
+
+构造：`{true, v}` 有值，`{false, 0}` 无值。
+
+```plang
+import std.io;
+import std.option;
+
+func main() : int {
+    var: Option<int> some = {true, 42};
+    var: Option<int> none = {false, 0};
+
+    if (some.isSome) { io.printInt(some.value); io.println(""); }   // 42
+    if (!none.isSome) { io.println("none 无值"); }
+    return 0;
+}
+```
+
+> 库级实现：编译期强制使用（访问 `value` 前必须检查 `isSome`）需要类型系统 D1 完整支持，当前为约定。
+
+---
+
+# std.result 错误处理
+
+`Result<T, E>` 是泛型结构体，表示"操作成功携带值，或失败携带错误码"。需要 `import std.result;`。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `isOk` | `bool` | 是否成功 |
+| `value` | `T` | 成功值（`isOk=false` 时无效） |
+| `error` | `E` | 错误码（`isOk=true` 时无效） |
+
+```plang
+import std.io;
+import std.result;
+
+func divide(a: int, b: int) -> Result<int, int> {
+    if (b == 0) { return {false, 0, 1}; }   // Err(1)
+    return {true, a / b, 0};                // Ok(a/b)
+}
+
+func main() : int {
+    var: Result<int, int> r = divide(10, 2);
+    if (r.isOk) { io.printInt(r.value); io.println(""); }   // 5
+    var: Result<int, int> e = divide(1, 0);
+    if (!e.isOk) { io.print("错误码 "); io.printInt(e.error); io.println(""); }
+    return 0;
+}
+```
+
+> `?` 传播运算符尚未实现（D6 后续）；错误处理目前为显式分支检查。

@@ -1,3 +1,11 @@
+# PLang 语言文档
+
+> **实现状态**：本文为语言设计文档。已实现：指针/数组、结构体/联合/位域/对齐、泛型结构体、RAII（construction/destroy）、
+> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result）。
+> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、`std.vector`/`std.string` 库、模板函数自动生成、`?` 错误传播。
+> 编译器：LLVM 优化（-O0~-O3）、DWARF 调试信息、错误恢复、独立编译单元、LSP（悬停/补全/跳转/重命名）。
+> 标准库通过 `import std.xxx` 独立编译为 `.o` 并与用户程序链接，见 `stdlib.md`。
+
 # 包
 ## 包的声明
 一个目录为一个包, 目录内所有 `.plang` 源文件同属一个包.
@@ -290,13 +298,92 @@ using Circle = struct : pub Shape {
 拷贝/移动/构造/析构链同样遵循该顺序.
 覆盖父类成员时, `prt`(子类可写)语义在继承下依旧成立.
 
+## 已实现的附加语言特性
+
+以下特性已实现并有测试覆盖，补充说明（详情见 `stdlib.md` 与 `ROADMAP.md`）：
+
+### 泛型结构体实例化
+`struct<T: type>` 定义模板，`Name<Arg1, Arg2>` 使用（支持多参数、嵌套、泛型方法）：
+```plang
+using Box = struct<T: type> {
+    pub val: T value;
+};
+var: Box<int> b = {42};          // 实例化 Box<int>
+var: Box<Box<int>> nb = {{7}};   // 嵌套实例化
+```
+泛型**函数**（`func foo<T>`）尚未实现。
+
+### RAII：construction / destroy
+变量声明后自动调用 `.construction`，作用域退出时逆序调用 `.destroy`：
+```plang
+using File = struct {
+    pub func .construction() : int { io.println("open"); return 0; }
+    pub func .destroy() : int { io.println("close"); return 0; }
+};
+func main() : int {
+    var: File f;   // 自动 construction
+    return 0;      // 块结束自动 destroy
+}
+```
+已知限制：`return`/`goto` 提前退出时不执行析构。
+
+### goto / label / switch
+```plang
+label start;             // 定义标签
+goto start;              // 跳转（支持前向跳转）
+switch (n) {             // 整数 switch
+    case 1: io.println("one");
+    case 2: io.println("two");
+    default: io.println("other");
+}
+```
+
+### 原子操作与 volatile
+`std.atomic` 提供 `load/store/add/sub/exchange/cas`，可选内存序参数
+（0=relaxed、1=acquire、2=release、3=acq_rel、4=seq_cst，默认 seq_cst）：
+```plang
+import std.atomic;
+var: int counter = 0;
+var -> var: int p = &counter;
+var: int old = atomic.add(p, 1);   // 原子自增，返回旧值
+var: bool ok = atomic.cas(p, 1, 2);
+```
+`volatile var: int flag = 0;` 声明 volatile 变量（读写不走缓存优化）。
+
+### 借用检查（悬垂返回检测）
+返回局部变量地址在编译期报错（D5 基础）：
+```plang
+func bad() -> var: ptr {
+    var: i64 x = 42;
+    return &x;   // 编译错误：cannot return reference to local variable 'x'
+}
+```
+参数指针、堆内存指针（`mem.malloc`）可正常返回。完整借用规则（可变/不可变冲突）尚未实现。
+
+### extern 全局数据
+`extern var` 声明外部全局变量（FFI）：
+```plang
+extern var stdin : ptr;
+```
+
 ## 标准库类型
-- `std.vector.vec`: 可变长数组, 有运行环境下可使用堆内存, 否则abort.
-- `std.string.str`: 可变ASCII字符串, 有运行环境下可使用堆内存, 否则强制使用栈.
-- `std.string.wstr`: 可变UTF-32字符串，有运行环境下可时候堆内存, 否则强制使用栈.
+- `std.vector.vec`: 可变长数组（**设计中，尚未实现**）.
+- `std.string.str`: 可变ASCII字符串（**设计中，尚未实现**）.
+- `std.string.wstr`: 可变UTF-32字符串（**设计中，尚未实现**）.
+
+已实现的标准库（位于 `std/`，通过 `import std.xxx` 独立编译链接）：
+
+| 库 | 功能 | 详述 |
+|----|------|------|
+| `std.io` | 标准输入输出 | 见下文 `# 标准输入输出` |
+| `std.thread` | 多线程 | 见下文 `# 多线程` |
+| `std.mem` | 堆内存 | `mem.malloc/free/memcpy/memset/memcmp`，extern 直通 libc |
+| `std.atomic` | 原子操作 | `atomic.load/store/add/sub/exchange/cas` + 内存序参数 |
+| `std.option` | null 安全 | `Option<T>` 泛型结构体：`{true, v}` 有值 / `{false, 0}` 无值 |
+| `std.result` | 错误处理 | `Result<T, E>` 泛型结构体：`{true, v, 0}` 成功 / `{false, 0, e}` 失败 |
 
 # 多线程 (std.thread)
-`std.thread` 是**真正的源码库**，位于 `std/thread/thread.plang`：`import std.thread;` 后编译器会解析该包源码并合并编译。
+`std.thread` 是**真正的源码库**，位于 `std/thread/thread.plang`：`import std.thread;` 后编译器将该包独立编译为 `.o` 并与用户程序链接。
 其中 `join` / `yield` / `lock` / `unlock` / `destroy` 是库内用源码实现的函数（内部通过 `extern` 调用 pthread），
 `spawn` / `sleep` / `mutex.create` 因需要蹦床与全局锁池而保留为编译器内置。
 
@@ -489,7 +576,7 @@ for (var i = a[1...5 step 1]) {
 默认步长为1.
 
 # 标准输入输出 (std.io)
-`std.io` 是真正的源码库，位于 `std/io/io.plang`：`import std.io;` 后编译器解析本包源码并合并编译。
+`std.io` 是真正的源码库，位于 `std/io/io.plang`：`import std.io;` 后编译器将该包独立编译为 `.o` 并与用户程序链接。
 数字→字符串的格式化在源码内实现（不依赖 libc 的 printf 舍入，跨平台位级一致）。
 
 ## 输出
