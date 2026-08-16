@@ -151,8 +151,12 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
     switch (node->type) {
         case ASTNodeType::LITERAL_INT: {
             auto* lit = static_cast<LiteralIntNode*>(node);
-            // 根据后缀决定宽度
+            // 根据后缀决定宽度；无后缀但放不下 32 位时自动拓宽为 64 位
             int bits = (lit->suffix == "ll" || lit->suffix == "LL") ? 64 : 32;
+            if (bits == 32 && (lit->value > 2147483647LL || lit->value < -2147483648LL))
+            {
+                bits = 64;
+            }
             return llvm::ConstantInt::get(context, llvm::APInt(bits, (uint64_t)lit->value, true));
         }
 
