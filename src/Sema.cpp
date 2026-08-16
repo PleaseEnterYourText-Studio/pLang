@@ -1096,6 +1096,12 @@ std::string Sema::visitExpr(ASTNode* node)
             visitExpr(castNode->value.get());
             return castNode->targetType;
         }
+        case ASTNodeType::SIZEOF_EXPR:
+        {
+            auto* sz = dynamic_cast<SizeofExprNode*>(node);
+            if (sz->targetType) visitExpr(nullptr); // 类型校验在 CodeGenerator 处理（大小按 LLVM 类型）
+            return "int";
+        }
         default: return "";
     }
 }

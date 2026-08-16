@@ -23,6 +23,7 @@ enum class TokenType
     AS,
     IF, ELSE, WHILE, FOR, DO, ASM,
     GOTO, LABEL, SWITCH, CASE, DEFAULT,
+    SIZEOF,      // sizeof(T) 类型大小
     EXTERN,      // extern func 声明（FFI）
     NULL_LIT,    // null 空指针字面量
 
@@ -82,6 +83,7 @@ public:
             {TokenType::AS, "AS"},
             {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"}, {TokenType::ASM, "ASM"},
             {TokenType::GOTO, "GOTO"}, {TokenType::LABEL, "LABEL"}, {TokenType::SWITCH, "SWITCH"}, {TokenType::CASE, "CASE"}, {TokenType::DEFAULT, "DEFAULT"},
+            {TokenType::SIZEOF, "SIZEOF"},
             {TokenType::EXTERN, "EXTERN"}, {TokenType::NULL_LIT, "NULL_LIT"},
             {TokenType::INT, "INT"}, {TokenType::CHAR, "CHAR"}, {TokenType::STRING_TYPE, "STRING_TYPE"}, {TokenType::WCHAR, "WCHAR"}, {TokenType::WSTRING, "WSTRING"}, {TokenType::BOOL, "BOOL"},
             {TokenType::TRUE, "TRUE"}, {TokenType::FALSE, "FALSE"},

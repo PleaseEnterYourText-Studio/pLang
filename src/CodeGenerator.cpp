@@ -181,6 +181,13 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             return llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0));
         }
 
+        case ASTNodeType::SIZEOF_EXPR: {
+            auto* sz = static_cast<SizeofExprNode*>(node);
+            llvm::Type* ty = sz->targetType ? getLLVMType(sz->targetType.get()) : llvm::Type::getInt32Ty(context);
+            unsigned bytes = module->getDataLayout().getTypeAllocSize(ty);
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), bytes);
+        }
+
         case ASTNodeType::LITERAL_STRING: {
             auto* lit = static_cast<LiteralStringNode*>(node);
             if (lit->isChar) {

@@ -48,6 +48,7 @@ void Lexer::initKeywords()
         {"switch", TokenType::SWITCH},
         {"case", TokenType::CASE},
         {"default", TokenType::DEFAULT},
+        {"sizeof", TokenType::SIZEOF},
         {"do", TokenType::DO},
         {"int", TokenType::INT},
         {"char", TokenType::CHAR},

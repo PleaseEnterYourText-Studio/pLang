@@ -1429,6 +1429,13 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
     {
         return std::make_unique<NullNode>(previous().line, previous().column);
     }
+    if (match(TokenType::SIZEOF))
+    {
+        expect(TokenType::LPAREN, "expected ( after sizeof");
+        auto ty = parseType();
+        expect(TokenType::RPAREN, "expected ) to close sizeof");
+        return std::make_unique<SizeofExprNode>(std::move(ty), previous().line, previous().column);
+    }
     if (match(TokenType::IDENT))
     {
         std::string name = previous().text;
