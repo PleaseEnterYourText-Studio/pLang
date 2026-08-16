@@ -183,8 +183,8 @@ b = 2; // c = 2;
 using t = struct {
     pub val: T a;
     pub func .converter();
-    pub func .construction() -> int;
-    pub func getData() -> T;
+    pub func .construction() : int;
+    pub func getData() : T;
 };
 ```
 其内部函数可在直接在内部实现, 也可在同包内用`impl`实现:
@@ -205,7 +205,7 @@ impl t {
 在结构体/接口的成员函数中, `this`表示当前实例的引用:
 ```plang
 using Circle = struct : pub Shape {
-    pub func area() -> f64 {
+    pub func area() : f64 {
         return 3.14 * this.r * this.r;
     }
 };
@@ -227,11 +227,11 @@ func foo<T: type>(val: T a, val: T b) {
 ```
 如果函数未声明将自动生成模板函数:
 ```
-func foo1<T: type>(val: T a) -> T {
+func foo1<T: type>(val: T a) : T {
     return a;
 }
 
-func foo2(val a) -> typeof(a) {
+func foo2(val a) : typeof(a) {
     return a;
 }
 ```
@@ -262,8 +262,8 @@ using t = struct {
 支持多继承, 一个结构体可同时继承多个父结构体.
 继承默认`pri`(私有继承), 仅当显式书写`pub`时为公开继承:
 ```plang
-using A = struct { pub func run() -> int; };
-using B = struct { pub func stop() -> int; };
+using A = struct { pub func run() : int; };
+using B = struct { pub func stop() : int; };
 using S = struct : pub A, B { }; // A 公开继承, B 私有继承
 ```
 禁止菱形继承, 一个类只能作为直接基类出现一次, 若A和B均继承自C, 则S同时继承A和B是非法的.
@@ -276,10 +276,10 @@ using S = struct : pub A, B { }; // A 公开继承, B 私有继承
 接口(`abstract`)走动态分派, 父类只声明函数而无实现, 子类必须实现, 运行时通过函数指针表分派:
 ```plang
 using Shape = abstract {
-    pub func area() -> f64; // 仅声明, 无实现
+    pub func area() : f64; // 仅声明, 无实现
 };
 using Circle = struct : pub Shape {
-    pub func area() -> f64 {
+    pub func area() : f64 {
         return 3.14 * this.r * this.r;
     }
 };
@@ -306,12 +306,12 @@ using Circle = struct : pub Shape {
 ```plang
 import std.thread;
 
-func worker() -> int {
+func worker() : int {
     // 线程体
     return 0;
 }
 
-func main() -> int {
+func main() : int {
     var -> var: ptr t1 = thread.spawn(worker);
     var -> var: ptr t2 = thread.spawn(worker);
     thread.join(t1);
@@ -340,29 +340,33 @@ thread.destroy(m);
 # 外部函数接口 (extern FFI)
 使用 `extern func` 声明 C 函数, 编译器映射为 LLVM 外部声明 (declare), 链接期解析符号:
 ```plang
-extern func sched_yield() -> int;
-extern func pthread_join(var -> var: ptr handle, var -> var: ptr result) -> int;
+extern func sched_yield() : int;
+extern func pthread_join(var -> var: ptr handle, var -> var: ptr result) : int;
 ```
 - 参数类型使用指针类型 `var -> var: ptr`（通用指针）, 空指针字面量写作 `null`.
 - extern 声明属于声明所在包, 遵循包可见性规则（跨包调用需 `pub`）.
 
 # 函数
 ## 函数的定义
-以`func`关键字定义
+以`func`关键字定义, 返回值书写方式与变量声明统一:
+- `func foo() : T` 返回类型`T`（与 `var: T a` 一致）.
+- `func foo() -> var T` 返回`T`指针（与 `var -> var: T p` 的箭头写法一致, 也可写 `-> var: T`）.
 ```plang
-func foo() -> T {
+func foo() : T {
+}
+func bar() -> var T {
 }
 ```
-其中`T`为返回类型. 无返回省略.
+其中`T`为返回类型. 无返回省略. 旧写法 `-> T` 仍兼容（值返回）.
 函数参数使用`val`/`var`修饰, 对于`移动构造/赋值函数`可用`moved`, 格式与变量声明一致, 多个参数以逗号分隔:
 ```plang
-func foo(val: int a, var: string b) -> int {
+func foo(val: int a, var: string b) : int {
     return a;
 }
 ```
 当然可以使用无实现, 在同一包内用`impl`实现:
 ```
-func foo() -> int;
+func foo() : int;
 impl foo {
     return 1;
 };
@@ -371,7 +375,7 @@ impl foo {
 ## 程序入口
 程序通常以`main`函数为入口:
 ```plang
-func main() -> int {
+func main() : int {
     return 0;
 }
 ```

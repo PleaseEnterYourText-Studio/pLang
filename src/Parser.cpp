@@ -378,10 +378,40 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
         } while (match(TokenType::COMMA));    }
     expect(TokenType::RPAREN, "expected )");
 
-    // 返回类型
-    if (match(TokenType::ARROW))
+    // 返回类型（与变量声明统一）：
+    //   func foo() : T          返回 T（值，与 var: T a 的写法一致）
+    //   func foo() -> var T     返回 T 指针（箭头 + var/val 修饰，兼容 -> var: T）
+    //   func foo() -> T         旧语法：返回 T（值），保留兼容
+    if (match(TokenType::COLON))
     {
         fnDecl->returnType = parseType();
+    }
+    else if (match(TokenType::ARROW))
+    {
+        if (check(TokenType::VAR) || check(TokenType::VAL))
+        {
+            // 指针返回：-> var T
+            bool innerConst = false;
+            if (match(TokenType::VAR)) { /* rw */ }
+            else if (match(TokenType::VAL)) { innerConst = true; }
+
+            std::unique_ptr<TypeNode> inner;
+            if (match(TokenType::COLON))
+            {
+                inner = parseTypeSuffix();
+            }
+            else
+            {
+                inner = parsePrimitiveType();
+            }
+            fnDecl->returnType = std::make_unique<TypeNode>(
+                ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                0, std::move(inner), innerConst);
+        }
+        else
+        {
+            fnDecl->returnType = parseType(); // 旧语法兼容：值返回
+        }
     }
 
     if (match(TokenType::SEMICOLON))

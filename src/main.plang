@@ -13,28 +13,28 @@ using Point = struct {
 };
 
 using Shape = abstract {
-    pub func area() -> f64;
+    pub func area() : f64;
 };
 using Circle = struct : pub Shape {
     pub val: f64 r;
     pub val: f64 r;
-    pub func area() -> f64 {
+    pub func area() : f64 {
         return 3.14 * this.r * this.r;
     }
 };
 
 // 函数定义与调用
-func add(val: int a, val: int b) -> int {
+func add(val: int a, val: int b) : int {
     return a + b;
 }
 
-func useMoved(val: string s) -> int {
+func useMoved(val: string s) : int {
     var: string copy = s;
     return 1;
 }
 
 // 线程入口：CPU 密集计算
-func burn() -> int {
+func burn() : int {
     var: i64 i = 0;
     while (i < 2000000000) {
         i = i + 1;
@@ -42,13 +42,19 @@ func burn() -> int {
     return 0;
 }
 
+// 指针返回：func foo() -> var T（与 var -> var: T 的箭头写法统一）
+func getCounter() -> var: int {
+    var: int counter = 42;
+    return &counter;
+}
+
 // 线程入口：休眠 50ms
-func snooze() -> int {
+func snooze() : int {
     thread.sleep(50);
     return 0;
 }
 
-func main() -> int {
+func main() : int {
     // 基本类型变量
     var: i32 a = 42;
     val: i64 big = 0xFF;
@@ -71,6 +77,10 @@ func main() -> int {
     var -> var: int p = &a;
     var ref@a;
     *p = 1;
+
+    // 指针返回
+    var -> var: int q = getCounter();
+    *q = 1;
 
     // 数组
     var: int[3] arr = {1, 2, 3};

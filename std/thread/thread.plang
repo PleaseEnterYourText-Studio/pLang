@@ -5,11 +5,11 @@ package std.thread;
 // 其余 API 均为下方源码实现。
 
 // extern C 声明（LLVM declare，不生成定义）
-extern func pthread_join(var -> var: ptr handle, var -> var: ptr result) -> int;
-extern func sched_yield() -> int;
-extern func pthread_mutex_lock(var -> var: ptr mutex) -> int;
-extern func pthread_mutex_unlock(var -> var: ptr mutex) -> int;
-extern func pthread_mutex_destroy(var -> var: ptr mutex) -> int;
+extern func pthread_join(var -> var: ptr handle, var -> var: ptr result) : int;
+extern func sched_yield() : int;
+extern func pthread_mutex_lock(var -> var: ptr mutex) : int;
+extern func pthread_mutex_unlock(var -> var: ptr mutex) : int;
+extern func pthread_mutex_destroy(var -> var: ptr mutex) : int;
 
 // 阻塞等待线程结束
 pub func join(var -> var: ptr handle) {
