@@ -239,6 +239,7 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     currentPackage = node->packageName;
     functionLabels.clear();
     duplicateLabels.clear();
+    currentLocals.clear();
     if (!currentStruct.empty())
     {
         // 方法：注册 this（指向当前结构体实例）
@@ -616,6 +617,10 @@ void Sema::visitVarDecl(VariableDeclNode* node)
     {
         error(node->line, node->column, "duplicate variable '" + node->name + "'");
     }
+    else
+    {
+        currentLocals.insert(node->name); // 借用检查：局部变量
+    }
 }
 
 void Sema::visitIf(IfStmtNode* node)
@@ -729,6 +734,19 @@ void Sema::visitReturn(ReturnStmtNode* node)
             {
                 error(node->line, node->column, "cannot return value of type '" + valueType +
                       "' from function returning '" + currentReturnType + "'");
+            }
+        }
+        // 借用检查：返回局部变量地址 → 悬垂指针
+        if (currentReturnType == "pointer" && node->value->type == ASTNodeType::UNARY_OP)
+        {
+            if (auto* addr = dynamic_cast<AddressOfNode*>(node->value.get()))
+            {
+                std::string root = rootVarName(addr->operand.get());
+                if (!root.empty() && currentLocals.count(root))
+                {
+                    error(node->line, node->column, "cannot return reference to local variable '" +
+                          root + "' (dangling pointer)");
+                }
             }
         }
     }
@@ -1371,6 +1389,22 @@ std::string Sema::visitAssignment(AssignmentNode* node)
 }
 
 // 类型工具
+
+// 取地址表达式的根变量名（&a.b[0] → "a"；&函数名 → 空）
+std::string Sema::rootVarName(ASTNode* node)
+{
+    if (!node) return "";
+    if (node->type == ASTNodeType::VARIABLE_REF)
+    {
+        if (auto* ref = dynamic_cast<VariableRefNode*>(node)) return ref->name;
+    }
+    if (node->type == ASTNodeType::VARIABLE_REF || node->type == ASTNodeType::FUNCTION_CALL)
+    {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(node)) return rootVarName(ma->object.get());
+    }
+    if (auto* idx = dynamic_cast<IndexNode*>(node)) return rootVarName(idx->operand.get());
+    return "";
+}
 
 std::string Sema::typeNodeToName(TypeNode* type)
 {

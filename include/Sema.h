@@ -63,6 +63,7 @@ private:
     std::set<std::string> functionLabels;   // 当前函数的 label 集合
     std::string currentStruct;              // 当前方法所属结构体（空=自由函数）
     std::set<std::string> duplicateLabels;  // 重复 label 检测
+    std::set<std::string> currentLocals;    // 当前函数内声明的局部变量（借用检查）
 
 public:
     bool analyze(std::unique_ptr<ProgramNode>& program);
@@ -113,6 +114,7 @@ private:
 
     // 类型工具
     std::string typeNodeToName(TypeNode* type);
+    std::string rootVarName(ASTNode* node);     // 取地址表达式的根变量名（借用检查）
     bool isBuiltinType(const std::string& type) const;
     bool isNumericType(const std::string& type) const;
     bool isCompatible(const std::string& from, const std::string& to) const;
