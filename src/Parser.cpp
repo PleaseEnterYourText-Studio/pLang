@@ -555,7 +555,7 @@ std::unique_ptr<ASTNode> Parser::parseImplDecl()
 
 std::unique_ptr<ASTNode> Parser::parseStatement()
 {
-    if (check(TokenType::VAR) || check(TokenType::VAL)) return parseVarDecl();
+    if (check(TokenType::VAR) || check(TokenType::VAL) || check(TokenType::VOLATILE)) return parseVarDecl();
     if (check(TokenType::IF)) return parseIf();
     if (check(TokenType::WHILE)) return parseWhile();
     if (check(TokenType::FOR)) return parseFor();
@@ -642,6 +642,8 @@ std::unique_ptr<ASTNode> Parser::parseAsm()
 
 std::unique_ptr<ASTNode> Parser::parseVarDecl()
 {
+    bool isVolatile = false;
+    if (match(TokenType::VOLATILE)) isVolatile = true;
     bool isVar;
     if (match(TokenType::VAL)) isVar = false;
     else if (match(TokenType::VAR)) isVar = true;
@@ -722,7 +724,7 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
 
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<VariableDeclNode>(isVar, isMoved, name, std::move(type), std::move(init),
-                                              previous().line, previous().column, bitWidth);
+                                              previous().line, previous().column, bitWidth, isVolatile);
 }
 
 std::unique_ptr<ASTNode> Parser::parseIf()

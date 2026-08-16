@@ -343,11 +343,13 @@ struct VariableDeclNode : ASTNode
     std::unique_ptr<TypeNode> type;
     std::unique_ptr<ASTNode> initializer;
     int bitWidth;               // 位域宽度（0=普通字段）
+    bool isVolatile;            // volatile 修饰
 
     VariableDeclNode(bool isVar, bool isMoved, const std::string& name, std::unique_ptr<TypeNode> type,
-                     std::unique_ptr<ASTNode> initializer, int line = 0, int column = 0, int bitWidth = 0)
+                     std::unique_ptr<ASTNode> initializer, int line = 0, int column = 0, int bitWidth = 0,
+                     bool isVolatile = false)
         : ASTNode(ASTNodeType::VARIABLE_DECL, line, column), isVar(isVar), isMoved(isMoved), name(name),
-          type(std::move(type)), initializer(std::move(initializer)), bitWidth(bitWidth) {}
+          type(std::move(type)), initializer(std::move(initializer)), bitWidth(bitWidth), isVolatile(isVolatile) {}
 };
 
 // 赋值语句

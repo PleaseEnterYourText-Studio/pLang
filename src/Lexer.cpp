@@ -20,6 +20,7 @@ void Lexer::initKeywords()
         {"var", TokenType::VAR},
         {"val", TokenType::VAL},
         {"moved", TokenType::MOVE},
+        {"volatile", TokenType::VOLATILE},
         {"func", TokenType::FUNC},
         {"impl", TokenType::IMPL},
         {"return", TokenType::RETURN},

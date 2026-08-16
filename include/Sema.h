@@ -85,6 +85,7 @@ private:
     std::string visitLogical(LogicalOpNode* node);
     std::string visitCall(FunctionCallNode* node);
     std::string visitThreadCall(FunctionCallNode* node);   // std.thread 内置 API 校验
+    std::string visitAtomicCall(FunctionCallNode* node);   // std.atomic 内置 API 校验
     std::string visitLiteralInt(LiteralIntNode* node);
     std::string visitLiteralFloat(LiteralFloatNode* node);
     std::string visitLiteralString(LiteralStringNode* node);

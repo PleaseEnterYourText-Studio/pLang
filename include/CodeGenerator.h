@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <string>
+#include <set>
 #include <unordered_map>
 #include <memory>
 #include "llvm/IR/IRBuilder.h"
@@ -35,6 +36,7 @@ private:
     std::unordered_map<std::string, VarInfo> namedValues;
     std::unordered_map<std::string, llvm::Type*> namedValueElementTypes;  // 指针变量/参数 → 指向类型
     std::unordered_map<std::string, llvm::GlobalVariable*> externGlobals;  // extern 全局数据
+    std::set<std::string> volatileVars;   // volatile 变量（访问走 volatile load/store）
 
     // std.thread 内置支持
     int mutexSlotCount = 0;             // 已分配的互斥锁槽位数（池上限 64）
@@ -83,6 +85,9 @@ private:
 
     // std.thread 内置调用生成
     llvm::Value* generateThreadBuiltin(FunctionCallNode* call);
+    // std.atomic 原子内置调用生成
+    llvm::Value* generateAtomicBuiltin(FunctionCallNode* call);
+    llvm::AtomicOrdering atomicOrderOf(llvm::Value* orderVal);
     llvm::Function* getOrDeclareFunction(const std::string& name,
                                          llvm::Type* retType,
                                          const std::vector<llvm::Type*>& paramTypes);

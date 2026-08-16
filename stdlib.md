@@ -216,3 +216,38 @@ io.printf("hex=%x\n", 255);           // hex=ff
 ```
 
 > 格式符与实参类型必须匹配（`%d`→int、`%f`→f64、`%s`→字符串/指针、`%x`→int）。
+
+---
+
+# std.atomic 原子操作
+
+编译器内置（LLVM atomicrmw/cmpxchg），用于多线程共享计数器/标志。需要 `import std.atomic;`。
+
+| 函数 | 说明 |
+|------|------|
+| `atomic.load(p)` | 原子读取 |
+| `atomic.store(p, v)` | 原子写入 |
+| `atomic.add(p, v)` / `atomic.sub(p, v)` | 原子加/减，**返回旧值** |
+| `atomic.exchange(p, v)` | 原子交换，返回旧值 |
+| `atomic.cas(p, expect, desired)` | 比较交换，返回是否成功（bool） |
+
+内存序参数（可选，最后一个）：`0`=relaxed、`1`=acquire、`2`=release、`3`=acq_rel、`4`=seq_cst（默认）。
+
+`p` 必须是指向整数类型的指针（如 `var -> var: int`）。
+
+```plang
+var: int counter = 0;
+var -> var: int p = &counter;
+var: int old = atomic.add(p, 1);   // 原子自增，返回旧值
+var: bool ok = atomic.cas(p, 1, 2);
+```
+
+## volatile 变量
+
+`volatile var: int flag = 0;` —— 对该变量的读写不走缓存优化（LLVM volatile load/store），用于与外部/中断交互。
+
+```plang
+volatile var: int flag = 0;
+flag = 1;          // volatile store
+var: int v = flag; // volatile load
+```

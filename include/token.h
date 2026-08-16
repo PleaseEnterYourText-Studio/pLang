@@ -15,7 +15,7 @@ enum class TokenType
 
     //关键字
     PACKAGE, IMPORT,
-    VAR, VAL, MOVE,
+    VAR, VAL, MOVE, VOLATILE,
     FUNC, IMPL, RETURN,
     USING, STRUCT, ABSTRACT, UNION, ALIGN,
     PUB, PRT, PRI,
@@ -72,6 +72,7 @@ public:
             {TokenType::IDENT, "IDENT"}, {TokenType::NUMBER, "NUMBER"}, {TokenType::STRING, "STRING"}, {TokenType::CHAR_LIT, "CHAR_LIT"},
             {TokenType::PACKAGE, "PACKAGE"}, {TokenType::IMPORT, "IMPORT"},
             {TokenType::VAR, "VAR"}, {TokenType::VAL, "VAL"}, {TokenType::MOVE, "MOVE"},
+            {TokenType::VOLATILE, "VOLATILE"},
             {TokenType::FUNC, "FUNC"}, {TokenType::IMPL, "IMPL"}, {TokenType::RETURN, "RETURN"},
             {TokenType::USING, "USING"}, {TokenType::STRUCT, "STRUCT"}, {TokenType::ABSTRACT, "ABSTRACT"},
             {TokenType::UNION, "UNION"}, {TokenType::ALIGN, "ALIGN"},

@@ -613,6 +613,12 @@ std::string Sema::visitCall(FunctionCallNode* node)
         return visitThreadCall(node);
     }
 
+    // std.atomic 原子内置调用
+    if (node->name.rfind("atomic.", 0) == 0)
+    {
+        return visitAtomicCall(node);
+    }
+
     // 成员方法调用 circle.area() / 包限定调用 thread.join() —— 拆分根对象与方法名
     size_t dot = node->name.find('.');
     if (dot != std::string::npos)
@@ -840,6 +846,69 @@ std::string Sema::visitThreadCall(FunctionCallNode* node)
 
     error(node->line, node->column, "unknown function '" + full + "' in module std.thread");
     return "";
+}
+
+// ===== std.atomic 编译器内置 =====
+
+std::string Sema::visitAtomicCall(FunctionCallNode* node)
+{
+    if (importedModules.find("std.atomic") == importedModules.end())
+    {
+        error(node->line, node->column,
+              "module 'std.atomic' is not imported (add 'import std.atomic;')");
+        return "";
+    }
+    const std::string& full = node->name;
+    const size_t n = node->arguments.size();
+
+    // 第一个参数必须是指针且已知指向整数类型
+    std::string elemType;
+    if (n >= 1 && node->arguments[0]->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = dynamic_cast<VariableRefNode*>(node->arguments[0].get());
+        auto it = pointerElementTypes.find(ref->name);
+        if (it != pointerElementTypes.end()) elemType = it->second;
+    }
+    else
+    {
+        visitExpr(node->arguments[0].get());
+    }
+    if (elemType.empty() || !isNumericType(elemType))
+    {
+        error(node->line, node->column,
+              "'" + full + "' expects a pointer to an integer type");
+        return "";
+    }
+
+    // 固定参数个数：load/exchange=1，store/add/sub=2，cas=3；可带一个内存序参数
+    size_t fixed;
+    if (full == "atomic.load" || full == "atomic.exchange") fixed = 1;
+    else if (full == "atomic.store" || full == "atomic.add" || full == "atomic.sub") fixed = 2;
+    else if (full == "atomic.cas") fixed = 3;
+    else
+    {
+        error(node->line, node->column, "unknown function '" + full + "' in module std.atomic");
+        return "";
+    }
+    if (n < fixed || n > fixed + 1)
+    {
+        error(node->line, node->column, "function '" + full + "' expects " +
+              std::to_string(fixed) + " argument(s) plus optional memory order, got " + std::to_string(n));
+        return "";
+    }
+    for (size_t i = 1; i < fixed; ++i) visitExpr(node->arguments[i].get());
+    if (n == fixed + 1)
+    {
+        std::string ot = visitExpr(node->arguments[n - 1].get());
+        if (!ot.empty() && !isNumericType(ot))
+        {
+            error(node->line, node->column, "memory order must be an integer (0-4), got '" + ot + "'");
+        }
+    }
+
+    if (full == "atomic.store") return "";
+    if (full == "atomic.cas") return "bool";
+    return elemType; // load/add/sub/exchange 返回旧值/当前值，类型为元素类型
 }
 
 std::string Sema::visitLiteralInt(LiteralIntNode* node)

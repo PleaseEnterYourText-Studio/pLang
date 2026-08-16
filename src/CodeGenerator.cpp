@@ -129,7 +129,10 @@ llvm::Value* CodeGenerator::getVariable(const std::string& name)
 
     auto it = namedValues.find(name);
     if (it != namedValues.end()) {
-        return builder.CreateLoad(it->second.type, it->second.ptr, name);
+        bool isVol = volatileVars.count(name) > 0;
+        llvm::LoadInst* li = builder.CreateLoad(it->second.type, it->second.ptr, name);
+        if (isVol) li->setVolatile(true);
+        return li;
     }
     // extern 全局数据（如 stdin）：加载全局存储的值
     auto gIt = externGlobals.find(name);
@@ -392,6 +395,11 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
         case ASTNodeType::FUNCTION_CALL: {
             auto* call = static_cast<FunctionCallNode*>(node);
 
+            // std.atomic 原子内置调用
+            if (call->name.rfind("atomic.", 0) == 0) {
+                return generateAtomicBuiltin(call);
+            }
+
             // std.thread 编译器内置调用（spawn / sleep / mutex.create）
             if (call->name == "thread.spawn" || call->name == "thread.sleep" ||
                 call->name == "thread.mutex.create") {
@@ -482,6 +490,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             llvm::AllocaInst* alloca = builder.CreateAlloca(varType, nullptr, decl->name);
             if (align > 0) alloca->setAlignment(llvm::Align(align));
             namedValues[decl->name] = VarInfo{alloca, varType};
+            if (decl->isVolatile) volatileVars.insert(decl->name);
 
             if (decl->initializer) {
                 if (decl->initializer->type == ASTNodeType::BLOCK_STMT &&
@@ -495,7 +504,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
                 {
                     llvm::Value* initVal = generateExpression(decl->initializer.get());
                     if (initVal) {
-                        builder.CreateStore(initVal, alloca);
+                        builder.CreateStore(initVal, alloca, decl->isVolatile);
                     }
                 }
             }
@@ -507,6 +516,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             llvm::Value* varPtr = nullptr;
             llvm::Type* varType = llvm::Type::getInt32Ty(context);
             int memberBitWidth = 0;
+            bool assignVolatile = false;
             if (assign->target->type == ASTNodeType::VARIABLE_REF) {
                 auto* ref = static_cast<VariableRefNode*>(assign->target.get());
                 if (ref->name.find('.') != std::string::npos) {
@@ -523,6 +533,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
                         varType = it->second.type;
                     }
                 }
+                assignVolatile = volatileVars.count(ref->name) > 0;
             } else if (assign->target->type == ASTNodeType::UNARY_OP) {
                 // 解引用赋值 *p = v：按指向类型存储
                 auto* unary = static_cast<UnaryOpNode*>(assign->target.get());
@@ -552,7 +563,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
                         llvm::Value* cleared = builder.CreateAnd(cell, builder.CreateNot(mask), "bitfieldClear");
                         val = builder.CreateOr(cleared, builder.CreateAnd(val, mask), "bitfieldSet");
                     }
-                    builder.CreateStore(val, varPtr);
+                    builder.CreateStore(val, varPtr, assignVolatile);
                 }
             }
             break;
@@ -1413,4 +1424,85 @@ llvm::Value* CodeGenerator::generateThreadBuiltin(FunctionCallNode* call)
 
     std::cerr << "Error: unknown std.thread builtin '" << name << "'" << std::endl;
     return nullPtr;
+}
+
+// 内存序参数 → LLVM AtomicOrdering
+llvm::AtomicOrdering CodeGenerator::atomicOrderOf(llvm::Value* orderVal)
+{
+    int o = 4;
+    if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(orderVal)) o = (int)ci->getSExtValue();
+    switch (o)
+    {
+        case 0: return llvm::AtomicOrdering::Monotonic;
+        case 1: return llvm::AtomicOrdering::Acquire;
+        case 2: return llvm::AtomicOrdering::Release;
+        case 3: return llvm::AtomicOrdering::AcquireRelease;
+        default: return llvm::AtomicOrdering::SequentiallyConsistent;
+    }
+}
+
+// std.atomic 原子内置调用（LLVM atomicrmw / cmpxchg / 原子 load/store）
+llvm::Value* CodeGenerator::generateAtomicBuiltin(FunctionCallNode* call)
+{
+    const std::string& name = call->name;
+    llvm::Type* elemTy = pointerElementType(call->arguments[0].get());
+    if (!elemTy->isIntegerTy())
+    {
+        std::cerr << "Error: atomic operations require an integer pointer" << std::endl;
+        return nullptr;
+    }
+    const size_t n = call->arguments.size();
+
+    // 可选内存序参数（最后一个）：0-4，默认 seq_cst
+    llvm::AtomicOrdering ord = llvm::AtomicOrdering::SequentiallyConsistent;
+    size_t orderIdx = n - 1;
+    bool hasOrder = false;
+    if ((name == "atomic.store" || name == "atomic.add" || name == "atomic.sub" ||
+         name == "atomic.exchange") && n == 3) hasOrder = true;
+    else if (name == "atomic.load" && n == 2) hasOrder = true;
+    else if (name == "atomic.cas" && n == 4) hasOrder = true;
+    if (hasOrder) ord = atomicOrderOf(generateExpression(call->arguments[orderIdx].get()));
+
+    llvm::Value* ptr = generateExpression(call->arguments[0].get());
+    if (!ptr) return nullptr;
+
+    if (name == "atomic.load")
+    {
+        llvm::LoadInst* li = builder.CreateLoad(elemTy, ptr, "atomicLoad");
+        li->setAtomic(ord);
+        return li;
+    }
+    if (name == "atomic.store")
+    {
+        llvm::Value* v = generateExpression(call->arguments[1].get());
+        v = coerceValue(v, elemTy);
+        llvm::StoreInst* si = builder.CreateStore(v, ptr);
+        si->setAtomic(ord);
+        return nullptr;
+    }
+    if (name == "atomic.add" || name == "atomic.sub")
+    {
+        llvm::Value* v = generateExpression(call->arguments[1].get());
+        v = coerceValue(v, elemTy);
+        auto rmw = (name == "atomic.add") ? llvm::AtomicRMWInst::Add : llvm::AtomicRMWInst::Sub;
+        return builder.CreateAtomicRMW(rmw, ptr, v, llvm::MaybeAlign(), ord);
+    }
+    if (name == "atomic.exchange")
+    {
+        llvm::Value* v = generateExpression(call->arguments[1].get());
+        v = coerceValue(v, elemTy);
+        return builder.CreateAtomicRMW(llvm::AtomicRMWInst::Xchg, ptr, v, llvm::MaybeAlign(), ord);
+    }
+    if (name == "atomic.cas")
+    {
+        llvm::Value* cmp = generateExpression(call->arguments[1].get());
+        llvm::Value* newv = generateExpression(call->arguments[2].get());
+        cmp = coerceValue(cmp, elemTy);
+        newv = coerceValue(newv, elemTy);
+        llvm::AtomicCmpXchgInst* cx = builder.CreateAtomicCmpXchg(ptr, cmp, newv, llvm::MaybeAlign(), ord, ord);
+        // cmpxchg 返回 {旧值, 成功标志}，成功标志在索引 1
+        return builder.CreateExtractValue(cx, 1, "casOk");
+    }
+    std::cerr << "Error: unknown std.atomic builtin '" << name << "'" << std::endl;
+    return nullptr;
 }
