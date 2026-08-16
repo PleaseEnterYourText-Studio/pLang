@@ -499,6 +499,7 @@ struct FunctionDeclNode : ASTNode
     std::vector<std::unique_ptr<ParameterNode>> params;
     std::unique_ptr<TypeNode> returnType;
     std::unique_ptr<BlockStmtNode> body;
+    std::vector<std::string> typeParams;    // 泛型参数（如 <T: type> 的 T；空=普通函数）
     bool hasBody;
     bool isExtern;          // extern func：FFI 声明，不生成定义
     bool isPub;             // pub：跨包可见

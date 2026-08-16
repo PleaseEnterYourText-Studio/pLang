@@ -423,6 +423,7 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
     }
 
     auto fnDecl = std::make_unique<FunctionDeclNode>(name.text, name.line, name.column);
+    fnDecl->typeParams = typeParams;
 
     expect(TokenType::LPAREN, "expected (");
     if (!check(TokenType::RPAREN))
@@ -1430,7 +1431,54 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
     }
     if (match(TokenType::IDENT))
     {
-        return std::make_unique<VariableRefNode>(previous().text, previous().line, previous().column);
+        std::string name = previous().text;
+        // 泛型函数调用 foo<T1,T2>(...)：IDENT 后紧跟 < 时尝试解析泛型实参（失败则回退为普通标识符）
+        if (check(TokenType::LT))
+        {
+            size_t savePos = pos;
+            bool savedGT = genericPendingGT;
+            try
+            {
+                advance(); // <
+                std::string gname = name + "<";
+                do
+                {
+                    auto argTy = parseTypeSuffix();
+                    gname += typeNodeText(argTy.get());
+                    if (check(TokenType::COMMA)) gname += ",";
+                } while (match(TokenType::COMMA));
+                if (genericPendingGT)
+                {
+                    genericPendingGT = false;
+                }
+                else if (match(TokenType::GT)) { /* 已消费 */ }
+                else if (match(TokenType::SHR))
+                {
+                    genericPendingGT = true;
+                }
+                else
+                {
+                    throw std::runtime_error("generic call");
+                }
+                gname += ">";
+                // 仅当后面是 ( 才当作泛型调用，否则回退（可能是 a < b 比较）
+                if (check(TokenType::LPAREN))
+                {
+                    name = gname;
+                }
+                else
+                {
+                    pos = savePos;
+                    genericPendingGT = savedGT;
+                }
+            }
+            catch (...)
+            {
+                pos = savePos;
+                genericPendingGT = savedGT;
+            }
+        }
+        return std::make_unique<VariableRefNode>(name, previous().line, previous().column);
     }
     if (match(TokenType::THIS))
     {

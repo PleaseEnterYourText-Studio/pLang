@@ -55,10 +55,19 @@ private:
     };
     std::unordered_map<std::string, StructInfo> structRegistry;
     std::unordered_map<std::string, StructDeclNode*> genericTemplates;  // 泛型模板（名字 → 原声明）
+    std::unordered_map<std::string, FunctionDeclNode*> genericFuncTemplates;  // 泛型函数模板
+    std::set<std::string> genericFuncInstances;                          // 已实例化泛型函数（mangled 名）
     ProgramNode* currentProgram = nullptr;                              // 实例化注入用
     void instantiateGeneric(const std::string& mangledName);            // 泛型实例化（克隆+替换+注入）
+    void instantiateGenericFunc(const std::string& mangledName);        // 泛型函数实例化
     bool tryResolveGenericType(const std::string& name);                // 名字含 < 时尝试实例化
     std::unique_ptr<TypeNode> substituteType(TypeNode* t,
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
+    std::unique_ptr<BlockStmtNode> cloneBlock(BlockStmtNode* b,   // 深拷贝语句块（泛型函数实例化用）
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
+    std::unique_ptr<ASTNode> cloneStmt(ASTNode* n,
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
+    std::unique_ptr<ASTNode> cloneExpr(ASTNode* n,
         const std::vector<std::string>& params, const std::vector<std::string>& args);
     std::set<std::string> functionLabels;   // 当前函数的 label 集合
     std::string currentStruct;              // 当前方法所属结构体（空=自由函数）

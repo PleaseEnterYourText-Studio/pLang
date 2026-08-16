@@ -54,6 +54,12 @@ void Sema::visitProgram(ProgramNode* node)
         if (decl->type == ASTNodeType::FUNCTION_DECL)
         {
             auto* funcNode = dynamic_cast<FunctionDeclNode*>(decl.get());
+            // 泛型函数：登记模板，不注册普通符号（调用时实例化）
+            if (!funcNode->typeParams.empty())
+            {
+                genericFuncTemplates[funcNode->name] = funcNode;
+                continue;
+            }
             auto sym = std::make_shared<Symbol>(funcNode->name, SymbolKind::FUNCTION,
                                                 SymbolMutability::VAL, "fn",
                                                 funcNode->line, funcNode->column);
@@ -206,8 +212,11 @@ void Sema::visitDecl(ASTNode* node)
     switch (node->type)
     {
         case ASTNodeType::FUNCTION_DECL:
-            visitFunctionDecl(dynamic_cast<FunctionDeclNode*>(node));
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(node);
+            if (fn->typeParams.empty()) visitFunctionDecl(fn);  // 泛型函数模板：调用时实例化后检查
             break;
+        }
         case ASTNodeType::STRUCT_DECL:
             visitStructDecl(dynamic_cast<StructDeclNode*>(node));
             break;
@@ -449,6 +458,20 @@ std::unique_ptr<TypeNode> Sema::substituteType(TypeNode* t,
                                                   t->line, t->column);
             }
         }
+        // 嵌套泛型 Box<T> → Box<int>：实参串内做参数名替换
+        if (t->name.find('<') != std::string::npos)
+        {
+            std::string replaced = t->name;
+            for (size_t i = 0; i < params.size(); ++i)
+            {
+                size_t at;
+                while ((at = replaced.find(params[i])) != std::string::npos)
+                {
+                    replaced.replace(at, params[i].size(), args[i]);
+                }
+            }
+            return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, replaced, t->line, t->column);
+        }
         return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, t->name, t->line, t->column);
     }
     if (t->baseType == ASTNodeType::TYPE_POINTER || t->baseType == ASTNodeType::TYPE_ARRAY)
@@ -459,6 +482,204 @@ std::unique_ptr<TypeNode> Sema::substituteType(TypeNode* t,
     }
     return std::make_unique<TypeNode>(t->baseType, t->name, t->line, t->column,
                                       t->arraySize, nullptr, t->isConst);
+}
+
+// 深拷贝语句块（泛型函数实例化：克隆函数体并替换类型参数）
+std::unique_ptr<BlockStmtNode> Sema::cloneBlock(BlockStmtNode* b,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    auto clone = std::make_unique<BlockStmtNode>(b->line, b->column);
+    for (auto& s : b->statements)
+    {
+        clone->statements.push_back(cloneStmt(s.get(), params, args));
+    }
+    return clone;
+}
+
+std::unique_ptr<ASTNode> Sema::cloneStmt(ASTNode* n,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    if (!n) return nullptr;
+    switch (n->type)
+    {
+        case ASTNodeType::BLOCK_STMT:
+            return cloneBlock(dynamic_cast<BlockStmtNode*>(n), params, args);
+        case ASTNodeType::VARIABLE_DECL:
+        {
+            auto* v = dynamic_cast<VariableDeclNode*>(n);
+            auto t = v->type ? substituteType(v->type.get(), params, args) : nullptr;
+            auto init = v->initializer ? cloneExpr(v->initializer.get(), params, args) : nullptr;
+            return std::make_unique<VariableDeclNode>(v->isVar, v->isMoved, v->name, std::move(t),
+                                                      std::move(init), v->line, v->column,
+                                                      v->bitWidth, v->isVolatile);
+        }
+        case ASTNodeType::IF_STMT:
+        {
+            auto* s = dynamic_cast<IfStmtNode*>(n);
+            auto cond = s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr;
+            auto thenB = s->thenBranch ? cloneStmt(s->thenBranch.get(), params, args) : nullptr;
+            auto elseB = s->elseBranch ? cloneStmt(s->elseBranch.get(), params, args) : nullptr;
+            return std::make_unique<IfStmtNode>(std::move(cond), std::move(thenB), std::move(elseB),
+                                                s->line, s->column);
+        }
+        case ASTNodeType::WHILE_STMT:
+        {
+            auto* s = dynamic_cast<WhileStmtNode*>(n);
+            auto cond = s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr;
+            auto body = s->body ? cloneStmt(s->body.get(), params, args) : nullptr;
+            return std::make_unique<WhileStmtNode>(std::move(cond), std::move(body), s->line, s->column);
+        }
+        case ASTNodeType::FOR_STMT:
+        {
+            auto* s = dynamic_cast<ForStmtNode*>(n);
+            auto init = s->init ? cloneStmt(s->init.get(), params, args) : nullptr;
+            auto cond = s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr;
+            auto upd = s->update ? cloneExpr(s->update.get(), params, args) : nullptr;
+            auto body = s->body ? cloneStmt(s->body.get(), params, args) : nullptr;
+            return std::make_unique<ForStmtNode>(std::move(init), std::move(cond), std::move(upd),
+                                                 std::move(body), s->line, s->column);
+        }
+        case ASTNodeType::RETURN_STMT:
+        {
+            auto* s = dynamic_cast<ReturnStmtNode*>(n);
+            auto val = s->value ? cloneExpr(s->value.get(), params, args) : nullptr;
+            return std::make_unique<ReturnStmtNode>(std::move(val), s->line, s->column);
+        }
+        case ASTNodeType::GOTO_STMT:
+        {
+            auto* s = dynamic_cast<GotoStmtNode*>(n);
+            return std::make_unique<GotoStmtNode>(s->label, s->line, s->column);
+        }
+        case ASTNodeType::LABEL_STMT:
+        {
+            auto* s = dynamic_cast<LabelStmtNode*>(n);
+            return std::make_unique<LabelStmtNode>(s->name, s->line, s->column);
+        }
+        case ASTNodeType::SWITCH_STMT:
+        {
+            auto* s = dynamic_cast<SwitchStmtNode*>(n);
+            auto clone = std::make_unique<SwitchStmtNode>(
+                s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr, s->line, s->column);
+            for (auto& c : s->cases)
+            {
+                SwitchCase cc;
+                cc.value = c.value;
+                cc.isDefault = c.isDefault;
+                cc.body = c.body ? cloneBlock(c.body.get(), params, args) : nullptr;
+                clone->cases.push_back(std::move(cc));
+            }
+            return clone;
+        }
+        case ASTNodeType::EXPRESSION_STMT:
+        {
+            auto* s = dynamic_cast<ExpressionStmtNode*>(n);
+            auto e = s->expr ? cloneExpr(s->expr.get(), params, args) : nullptr;
+            return std::make_unique<ExpressionStmtNode>(std::move(e), s->line, s->column);
+        }
+        case ASTNodeType::ASSIGNMENT_STMT:
+        {
+            auto* s = dynamic_cast<AssignmentNode*>(n);
+            auto tgt = s->target ? cloneExpr(s->target.get(), params, args) : nullptr;
+            auto val = s->value ? cloneExpr(s->value.get(), params, args) : nullptr;
+            return std::make_unique<AssignmentNode>(std::move(tgt), std::move(val), s->op, s->line, s->column);
+        }
+        default:
+            return cloneExpr(n, params, args);
+    }
+}
+
+std::unique_ptr<ASTNode> Sema::cloneExpr(ASTNode* n,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    if (!n) return nullptr;
+    switch (n->type)
+    {
+        case ASTNodeType::LITERAL_INT:
+        {
+            auto* e = dynamic_cast<LiteralIntNode*>(n);
+            return std::make_unique<LiteralIntNode>(e->value, e->line, e->column, e->suffix);
+        }
+        case ASTNodeType::LITERAL_FLOAT:
+        {
+            auto* e = dynamic_cast<LiteralFloatNode*>(n);
+            return std::make_unique<LiteralFloatNode>(e->value, e->line, e->column, e->suffix);
+        }
+        case ASTNodeType::LITERAL_STRING:
+        {
+            auto* e = dynamic_cast<LiteralStringNode*>(n);
+            return std::make_unique<LiteralStringNode>(e->value, e->line, e->column, e->isChar);
+        }
+        case ASTNodeType::LITERAL_BOOL:
+        {
+            auto* e = dynamic_cast<LiteralBoolNode*>(n);
+            return std::make_unique<LiteralBoolNode>(e->value, e->line, e->column);
+        }
+        case ASTNodeType::LITERAL_NULL:
+        {
+            auto* e = dynamic_cast<NullNode*>(n);
+            return std::make_unique<NullNode>(e->line, e->column);
+        }
+        case ASTNodeType::VARIABLE_REF:
+        {
+            auto* e = dynamic_cast<VariableRefNode*>(n);
+            return std::make_unique<VariableRefNode>(e->name, e->line, e->column);
+        }
+        case ASTNodeType::BINARY_OP:
+        {
+            auto* e = dynamic_cast<BinaryOpNode*>(n);
+            return std::make_unique<BinaryOpNode>(e->op, cloneExpr(e->lift.get(), params, args),
+                                                  cloneExpr(e->right.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::UNARY_OP:
+        {
+            if (auto* a = dynamic_cast<AddressOfNode*>(n))
+            {
+                return std::make_unique<AddressOfNode>(cloneExpr(a->operand.get(), params, args),
+                                                       a->line, a->column);
+            }
+            auto* e = dynamic_cast<UnaryOpNode*>(n);
+            return std::make_unique<UnaryOpNode>(e->op, cloneExpr(e->operand.get(), params, args),
+                                                 e->line, e->column);
+        }
+        case ASTNodeType::COMPARISON_OP:
+        {
+            auto* e = dynamic_cast<ComparisonOpNode*>(n);
+            return std::make_unique<ComparisonOpNode>(e->op, cloneExpr(e->lift.get(), params, args),
+                                                      cloneExpr(e->right.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::LOGICAL_OP:
+        {
+            auto* e = dynamic_cast<LogicalOpNode*>(n);
+            return std::make_unique<LogicalOpNode>(e->op, cloneExpr(e->lift.get(), params, args),
+                                                   cloneExpr(e->right.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::FUNCTION_CALL:
+        {
+            auto* e = dynamic_cast<FunctionCallNode*>(n);
+            std::vector<std::unique_ptr<ASTNode>> argsClone;
+            for (auto& a : e->arguments) argsClone.push_back(cloneExpr(a.get(), params, args));
+            return std::make_unique<FunctionCallNode>(e->name, std::move(argsClone), e->line, e->column);
+        }
+        case ASTNodeType::INDEX:
+        {
+            auto* e = dynamic_cast<IndexNode*>(n);
+            return std::make_unique<IndexNode>(cloneExpr(e->operand.get(), params, args),
+                                               cloneExpr(e->index.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::CAST:
+        {
+            auto* e = dynamic_cast<CastNode*>(n);
+            return std::make_unique<CastNode>(e->targetType, cloneExpr(e->value.get(), params, args),
+                                              e->line, e->column);
+        }
+        case ASTNodeType::THIS_REF:
+        {
+            auto* e = dynamic_cast<ThisRefNode*>(n);
+            return std::make_unique<ThisRefNode>(e->line, e->column);
+        }
+        default:
+            return nullptr;
+    }
 }
 
 void Sema::instantiateGeneric(const std::string& mangled)
@@ -531,6 +752,68 @@ bool Sema::tryResolveGenericType(const std::string& name)
     if (name.find('<') == std::string::npos) return true;
     instantiateGeneric(name);
     return structRegistry.count(name) > 0;
+}
+
+// 泛型函数实例化：克隆声明 + 替换类型参数，注入主程序（mangled 名 "foo<int>"）
+void Sema::instantiateGenericFunc(const std::string& mangled)
+{
+    if (genericFuncInstances.count(mangled)) return; // 已实例化
+    size_t lt = mangled.find('<');
+    if (lt == std::string::npos) return;
+    std::string base = mangled.substr(0, lt);
+    auto tIt = genericFuncTemplates.find(base);
+    if (tIt == genericFuncTemplates.end()) return;
+    FunctionDeclNode* tmpl = tIt->second;
+
+    std::string argStr = mangled.substr(lt + 1, mangled.rfind('>') - lt - 1);
+    std::vector<std::string> args;
+    size_t pos = 0;
+    while (pos <= argStr.size())
+    {
+        size_t comma = argStr.find(',', pos);
+        std::string a = (comma == std::string::npos) ? argStr.substr(pos) : argStr.substr(pos, comma - pos);
+        while (!a.empty() && a.front() == ' ') a = a.substr(1);
+        while (!a.empty() && a.back() == ' ') a.pop_back();
+        if (!a.empty()) args.push_back(a);
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    if (args.size() != tmpl->typeParams.size()) return;
+
+    // 克隆函数：名字用 mangled，参数/返回类型替换 T → args
+    auto clone = std::make_unique<FunctionDeclNode>(mangled, tmpl->line, tmpl->column);
+    clone->hasBody = tmpl->hasBody;
+    clone->isExtern = tmpl->isExtern;
+    clone->isPub = tmpl->isPub;
+    clone->isVariadic = tmpl->isVariadic;
+    clone->packageName = tmpl->packageName;
+    for (auto& p : tmpl->params)
+    {
+        auto nt = p->type ? substituteType(p->type.get(), tmpl->typeParams, args) : nullptr;
+        clone->params.push_back(std::make_unique<ParameterNode>(
+            p->isVar, p->name, std::move(nt), p->line, p->column));
+    }
+    if (tmpl->returnType)
+    {
+        clone->returnType = substituteType(tmpl->returnType.get(), tmpl->typeParams, args);
+    }
+    // 函数体克隆（需要深拷贝，这里用 AST 深拷贝辅助；先克隆语句块）
+    clone->body = cloneBlock(tmpl->body.get(), tmpl->typeParams, args);
+
+    // 注册实例符号（函数本体名即 mangled）
+    auto sym = std::make_shared<Symbol>(mangled, SymbolKind::FUNCTION, SymbolMutability::VAL, "fn",
+                                        tmpl->line, tmpl->column);
+    sym->returnType = clone->returnType ? typeNodeToName(clone->returnType.get()) : "";
+    for (auto& p : clone->params)
+    {
+        sym->paramTypes.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+    }
+    sym->packageName = tmpl->packageName;
+    sym->isPub = tmpl->isPub;
+    symbols.declareGlobal(mangled, sym); // 根作用域，跨函数可见
+    genericFuncInstances.insert(mangled);
+
+    if (currentProgram) currentProgram->decls.push_back(std::move(clone));
 }
 
 void Sema::visitBlock(BlockStmtNode* node)
@@ -883,6 +1166,39 @@ std::string Sema::visitLogical(LogicalOpNode* node)
 
 std::string Sema::visitCall(FunctionCallNode* node)
 {
+    // 泛型函数调用 foo<T>(args)：实例化后按 mangled 名继续检查
+    if (node->name.find('<') != std::string::npos)
+    {
+        size_t lt = node->name.find('<');
+        if (genericFuncTemplates.count(node->name.substr(0, lt)))
+        {
+            instantiateGenericFunc(node->name);
+            auto gsym = symbols.lookup(node->name);
+            if (gsym && gsym->kind == SymbolKind::FUNCTION)
+            {
+                if (gsym->paramTypes.size() != node->arguments.size())
+                {
+                    error(node->line, node->column, "generic function '" + node->name + "' expects " +
+                          std::to_string(gsym->paramTypes.size()) + " argument(s), got " +
+                          std::to_string(node->arguments.size()));
+                }
+                for (size_t i = 0; i < node->arguments.size() && i < gsym->paramTypes.size(); ++i)
+                {
+                    std::string at = visitExpr(node->arguments[i].get());
+                    if (!at.empty() && !gsym->paramTypes[i].empty() && !isCompatible(at, gsym->paramTypes[i]))
+                    {
+                        error(node->line, node->column, "argument " + std::to_string(i + 1) + " of '" +
+                              node->name + "' expects '" + gsym->paramTypes[i] + "', got '" + at + "'");
+                    }
+                }
+                return gsym->returnType;
+            }
+            error(node->line, node->column, "unknown generic function '" + node->name + "'");
+            for (auto& a : node->arguments) visitExpr(a.get());
+            return "";
+        }
+    }
+
     // std.thread 编译器内置调用（仅 spawn / sleep / mutex.create；其余为 std.thread 源码库函数）
     if (node->name == "thread.spawn" || node->name == "thread.sleep" ||
         node->name == "thread.mutex.create")

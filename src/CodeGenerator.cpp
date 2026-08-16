@@ -126,7 +126,8 @@ llvm::Value* CodeGenerator::getVariable(const std::string& name)
             }
             return v;
         }
-        std::cerr << "Error: member access '" << name << "' failed" << std::endl;
+        std::cerr << "Error: member access '" << name << "' failed in '"
+                  << (currentFunction ? currentFunction->getName().str() : "?") << "'" << std::endl;
         return nullptr;
     }
 
@@ -1094,7 +1095,7 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
             if (u->aliased && u->aliased->type == ASTNodeType::STRUCT_DECL)
                 sn = dynamic_cast<StructDeclNode*>(u->aliased.get());
         }
-        if (sn && !sn->name.empty() && !structDefs.count(sn->name))
+        if (sn && !sn->name.empty() && !structDefs.count(sn->name) && sn->typeParams.empty())
         {
             structDecls.push_back(sn);
             structDefs[sn->name] = StructDef{llvm::StructType::create(context, sn->name), {}};
@@ -1182,7 +1183,8 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
         {
             if (m->type == ASTNodeType::FUNCTION_DECL)
             {
-                generateFunction(dynamic_cast<FunctionDeclNode*>(m.get()), true, sn->name);
+                auto* mfn = dynamic_cast<FunctionDeclNode*>(m.get());
+                if (mfn->typeParams.empty()) generateFunction(mfn, true, sn->name);
             }
         }
     }
@@ -1228,6 +1230,7 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
         if (decl->type == ASTNodeType::FUNCTION_DECL)
         {
             auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+            if (!fn->typeParams.empty()) continue; // 泛型函数模板：实例化后按 mangled 名生成
             if (fn->name != "main")
             {
                 if (fn->body)
