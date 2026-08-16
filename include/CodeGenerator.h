@@ -43,6 +43,9 @@ private:
     void generateStatement(ASTNode* node);
     void generateFunction(FunctionDeclNode* fn);
 
+    // 统一二元/比较操作数类型（整数拓宽、整数↔浮点提升），返回公共类型
+    llvm::Type* unifyOperands(llvm::Value*& left, llvm::Value*& right);
+
 public:
     CodeGenerator();
     ~CodeGenerator() = default;

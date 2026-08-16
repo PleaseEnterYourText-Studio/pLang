@@ -1,5 +1,6 @@
 #include "../include/CodeGenerator.h"
 #include <iostream>
+#include <algorithm>
 #include "llvm/TargetParser/Host.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Target/TargetMachine.h"
@@ -145,13 +146,17 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             auto* bin = static_cast<BinaryOpNode*>(node);
             auto* left = generateExpression(bin->lift.get());
             auto* right = generateExpression(bin->right.get());
+            if (!left || !right) break;
+
+            llvm::Type* commonTy = unifyOperands(left, right);
+            bool isFloat = commonTy && commonTy->isFloatingPointTy();
 
             switch (bin->op) {
-                case BinaryOpType::ADD: return builder.CreateAdd(left, right, "add");
-                case BinaryOpType::SUB: return builder.CreateSub(left, right, "sub");
-                case BinaryOpType::MUL: return builder.CreateMul(left, right, "mul");
-                case BinaryOpType::DIV: return builder.CreateSDiv(left, right, "div");
-                case BinaryOpType::MOD: return builder.CreateSRem(left, right, "mod");
+                case BinaryOpType::ADD: return isFloat ? builder.CreateFAdd(left, right, "add") : builder.CreateAdd(left, right, "add");
+                case BinaryOpType::SUB: return isFloat ? builder.CreateFSub(left, right, "sub") : builder.CreateSub(left, right, "sub");
+                case BinaryOpType::MUL: return isFloat ? builder.CreateFMul(left, right, "mul") : builder.CreateMul(left, right, "mul");
+                case BinaryOpType::DIV: return isFloat ? builder.CreateFDiv(left, right, "div") : builder.CreateSDiv(left, right, "div");
+                case BinaryOpType::MOD: return isFloat ? builder.CreateFRem(left, right, "mod") : builder.CreateSRem(left, right, "mod");
                 case BinaryOpType::BITAND: return builder.CreateAnd(left, right, "and");
                 case BinaryOpType::BITOR: return builder.CreateOr(left, right, "or");
                 case BinaryOpType::BITXOR: return builder.CreateXor(left, right, "xor");
@@ -216,6 +221,23 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             auto* comp = static_cast<ComparisonOpNode*>(node);
             auto* left = generateExpression(comp->lift.get());
             auto* right = generateExpression(comp->right.get());
+            if (!left || !right) break;
+
+            llvm::Type* commonTy = unifyOperands(left, right);
+
+            // 浮点比较
+            if (commonTy && commonTy->isFloatingPointTy()) {
+                llvm::FCmpInst::Predicate fpred;
+                switch (comp->op) {
+                    case ComparisonOpType::EQ: fpred = llvm::FCmpInst::FCMP_OEQ; break;
+                    case ComparisonOpType::NE: fpred = llvm::FCmpInst::FCMP_ONE; break;
+                    case ComparisonOpType::LT: fpred = llvm::FCmpInst::FCMP_OLT; break;
+                    case ComparisonOpType::LE: fpred = llvm::FCmpInst::FCMP_OLE; break;
+                    case ComparisonOpType::GT: fpred = llvm::FCmpInst::FCMP_OGT; break;
+                    case ComparisonOpType::GE: fpred = llvm::FCmpInst::FCMP_OGE; break;
+                }
+                return builder.CreateFCmp(fpred, left, right, "cmp");
+            }
 
             llvm::CmpInst::Predicate pred;
             switch (comp->op) {
@@ -713,3 +735,33 @@ bool CodeGenerator::emitObject(const std::string& filename)
     dest.flush();
     return true;
 }
+
+// 统一两个操作数的类型：整数拓宽 / 整数↔浮点提升，返回公共类型（无法统一时返回 nullptr）
+llvm::Type* CodeGenerator::unifyOperands(llvm::Value*& left, llvm::Value*& right)
+{
+    if (left->getType() == right->getType()) return left->getType();
+
+    if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) {
+        unsigned leftBits = left->getType()->getIntegerBitWidth();
+        unsigned rightBits = right->getType()->getIntegerBitWidth();
+        unsigned targetBits = std::max(leftBits, rightBits);
+        llvm::Type* targetTy = llvm::Type::getIntNTy(context, targetBits);
+        if (leftBits < targetBits) left = builder.CreateIntCast(left, targetTy, true, "promoteLeft");
+        if (rightBits < targetBits) right = builder.CreateIntCast(right, targetTy, true, "promoteRight");
+        return targetTy;
+    }
+
+    if (left->getType()->isFloatingPointTy() && right->getType()->isIntegerTy()) {
+        right = builder.CreateSIToFP(right, left->getType(), "toFloatRight");
+        return left->getType();
+    }
+    if (right->getType()->isFloatingPointTy() && left->getType()->isIntegerTy()) {
+        left = builder.CreateSIToFP(left, right->getType(), "toFloatLeft");
+        return right->getType();
+    }
+
+    return nullptr;
+}
+
+// std.thread 编译器内置支持
+
