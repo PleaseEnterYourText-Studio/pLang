@@ -97,15 +97,22 @@ llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
     return llvm::Type::getInt32Ty(context);
 }
 
+
 llvm::Value* CodeGenerator::getVariable(const std::string& name)
 {
     auto it = namedValues.find(name);
-    if (it == namedValues.end()) {
-        std::cerr << "Error: Variable '" << name << "' not declared" << std::endl;
-        return nullptr;
+    if (it != namedValues.end()) {
+        return builder.CreateLoad(it->second.type, it->second.ptr, name);
     }
-    return builder.CreateLoad(it->second.type, it->second.ptr, name);
+    // extern 全局数据（如 stdin）：加载全局存储的值
+    auto gIt = externGlobals.find(name);
+    if (gIt != externGlobals.end()) {
+        return builder.CreateLoad(gIt->second->getValueType(), gIt->second, name);
+    }
+    std::cerr << "Error: Variable '" << name << "' not declared" << std::endl;
+    return nullptr;
 }
+
 
 llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 {
@@ -671,6 +678,25 @@ void CodeGenerator::generate(ProgramNode* root)
     // 先收集所有函数定义（不含 main，main 单独处理保证入口）
     for (auto& decl : root->decls)
     {
+        if (decl->type == ASTNodeType::EXTERN_VAR_DECL)
+        {
+            // extern 全局数据：extern var stdin : ptr; → 外部全局声明
+            auto* ev = dynamic_cast<ExternVarDeclNode*>(decl.get());
+            if (!externGlobals.count(ev->name) && !module->getNamedGlobal(ev->name))
+            {
+                // 平台符号映射：macOS 的标准流符号是 __stdinp/__stdoutp/__stderrp
+                std::string symbolName = ev->name;
+#if defined(__APPLE__)
+                if (symbolName == "stdin") symbolName = "__stdinp";
+                else if (symbolName == "stdout") symbolName = "__stdoutp";
+                else if (symbolName == "stderr") symbolName = "__stderrp";
+#endif
+                llvm::Type* ty = getLLVMType(ev->type.get());
+                externGlobals[ev->name] = new llvm::GlobalVariable(
+                    *module, ty, false, llvm::GlobalValue::ExternalLinkage, nullptr, symbolName);
+            }
+            continue;
+        }
         if (decl->type == ASTNodeType::FUNCTION_DECL)
         {
             auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());

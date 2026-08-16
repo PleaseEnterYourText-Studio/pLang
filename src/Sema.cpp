@@ -105,6 +105,19 @@ void Sema::visitProgram(ProgramNode* node)
                 }
             }
         }
+        else if (decl->type == ASTNodeType::EXTERN_VAR_DECL)
+        {
+            // extern 全局数据：extern var stdin : ptr;
+            auto* ev = dynamic_cast<ExternVarDeclNode*>(decl.get());
+            auto sym = std::make_shared<Symbol>(ev->name, SymbolKind::VARIABLE,
+                                                ev->isVar ? SymbolMutability::VAR : SymbolMutability::VAL,
+                                                typeNodeToName(ev->type.get()),
+                                                ev->line, ev->column);
+            if (!symbols.declare(ev->name, sym))
+            {
+                error(ev->line, ev->column, "duplicate extern variable '" + ev->name + "'");
+            }
+        }
     }
 
     // 第二阶段：检查函数体
@@ -138,6 +151,8 @@ void Sema::visitDecl(ASTNode* node)
         case ASTNodeType::IMPL_DECL:
             visitImplDecl(dynamic_cast<ImplDeclNode*>(node));
             break;
+        case ASTNodeType::EXTERN_VAR_DECL:
+            break; // 已在第一阶段注册
         default:
             break;
     }
@@ -876,13 +891,16 @@ bool Sema::isCompatible(const std::string& from, const std::string& to) const
 {
     if (from == to) return true;
 
+    // ptr 与 pointer 别名
+    if ((from == "ptr" && to == "pointer") || (from == "pointer" && to == "ptr")) return true;
+
     // int/uint 别名
     if ((from == "int" && to == "i32") || (from == "i32" && to == "int")) return true;
     if ((from == "uint" && to == "u32") || (from == "u32" && to == "uint")) return true;
 
     // 整数提升：小类型可安全赋给大类型
     static const std::vector<std::string> intRank = {
-        "i8", "u8", "i16", "u16", "int", "uint", "i32", "u32", "i64", "u64"
+        "i8", "u8", "char", "i16", "u16", "int", "uint", "i32", "u32", "i64", "u64"
     };
     size_t rf = intRank.size(), rt = intRank.size();
     for (size_t i = 0; i < intRank.size(); ++i)

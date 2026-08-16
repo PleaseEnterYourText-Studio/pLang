@@ -214,9 +214,20 @@ std::unique_ptr<ASTNode> Parser::parseDeclaration()
         return decl;
     }
 
-    // extern FFI 声明：extern func ...
+    // extern FFI 声明：extern var stdin : ptr; / extern func ...
     if (match(TokenType::EXTERN))
     {
+        if (match(TokenType::VAR) || match(TokenType::VAL))
+        {
+            // extern 全局数据
+            bool isVar = previous().type == TokenType::VAR;
+            Token gname = expect(TokenType::IDENT, "expected extern variable name");
+            expect(TokenType::COLON, "expected : after extern variable name");
+            auto gtype = parseTypeSuffix();
+            expect(TokenType::SEMICOLON, "expected ;");
+            return std::make_unique<ExternVarDeclNode>(gname.text, std::move(gtype), isVar,
+                                                       gname.line, gname.column);
+        }
         auto fn = parseFunctionDecl();
         if (auto* fnNode = dynamic_cast<FunctionDeclNode*>(fn.get()))
         {

@@ -34,6 +34,7 @@ private:
     };
     std::unordered_map<std::string, VarInfo> namedValues;
     std::unordered_map<std::string, llvm::Type*> namedValueElementTypes;  // 指针变量/参数 → 指向类型
+    std::unordered_map<std::string, llvm::GlobalVariable*> externGlobals;  // extern 全局数据
 
     // std.thread 内置支持
     int mutexSlotCount = 0;             // 已分配的互斥锁槽位数（池上限 64）

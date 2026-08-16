@@ -29,6 +29,7 @@ enum class ASTNodeType
     USING_DECL,
     STRUCT_DECL,
     IMPL_DECL,
+    EXTERN_VAR_DECL,
 
     // 表达式
     LITERAL_INT,
@@ -358,6 +359,19 @@ struct AssignmentNode : ASTNode
     AssignmentNode(std::unique_ptr<ASTNode> target, std::unique_ptr<ASTNode> value, TokenType op, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::ASSIGNMENT_STMT, line, column), target(std::move(target)),
           value(std::move(value)), op(op) {}
+};
+
+// extern 全局数据声明 extern var stdin : ptr;
+struct ExternVarDeclNode : ASTNode
+{
+    std::string name;
+    std::unique_ptr<TypeNode> type;
+    bool isVar;
+
+    ExternVarDeclNode(const std::string& name, std::unique_ptr<TypeNode> type, bool isVar,
+                      int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::EXTERN_VAR_DECL, line, column),
+          name(name), type(std::move(type)), isVar(isVar) {}
 };
 
 // return 语句
