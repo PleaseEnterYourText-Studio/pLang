@@ -1,0 +1,12 @@
+package std.option;
+
+// PLang 标准库：Option<T>（null 安全的库级基础，泛型结构体实现）。
+// 用法：
+//   var: Option<int> some = {true, 42};   // 有值
+//   var: Option<int> none = {false, 0};   // 无值
+//   if (some.isSome) { io.printInt(some.value); }
+
+using Option = struct<T: type> {
+    pub val: bool isSome;   // 是否包含值
+    pub val: T value;       // 值（isSome=false 时无效）
+};
