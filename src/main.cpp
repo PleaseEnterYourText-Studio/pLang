@@ -79,7 +79,7 @@ std::vector<std::string> collectPlangFiles(const std::vector<std::string>& input
 }
 
 // ===== 链接可执行文件 =====
-bool linkExecutable(const std::vector<std::string>& objFiles, const std::string& exePath) {
+bool linkExecutable(const std::vector<std::string>& objFiles, const std::string& exePath, bool needSqlite) {
     if (objFiles.empty()) {
         std::cerr << "error: no object files to link\n";
         return false;
@@ -90,6 +90,7 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
     cmd = "ld -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
     cmd += " -lSystem -syslibroot $(xcrun --show-sdk-path) -e _main";
+    if (needSqlite) cmd += " -lsqlite3";
 #elif defined(__linux__)
     cmd = "ld -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
@@ -97,10 +98,12 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
     cmd = "g++ -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
     cmd += " -pthread";
+    if (needSqlite) cmd += " -lsqlite3";
 #elif defined(_WIN32)
     // Windows：用 clang 驱动（自动处理 CRT 与入口），对象文件 .obj
     cmd = "clang++ -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
+    if (needSqlite) cmd += " -lsqlite3";
 #else
     std::cerr << "error: unsupported platform for linking\n";
     return false;
@@ -283,13 +286,19 @@ bool compilePackage(const std::vector<std::string>& files,
     CodeGenerator generator;
     generator.generate(merged.get(), false); // 库包无入口
     generator.optimize(optLevel);
+    if (!generator.verify())
+    {
+        generator.saveToFile(fs::path(objPath).replace_extension(".ll").string()); // 保留 IR 供排查
+        std::cerr << "package " << merged->packageName << ": IR verification failed\n";
+        return false;
+    }
     return generator.emitObject(objPath);
 }
 
 // 编译整个编译单元（合并 + import 解析 + 单次语义分析/代码生成）
 bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
                  const std::string& objPath, const std::string& stdlibRoot, int optLevel,
-                 std::vector<std::string>& extraObjs)
+                 std::vector<std::string>& extraObjs, bool& needSqlite)
 {
     if (sources.empty()) return false;
 
@@ -385,6 +394,11 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
     std::vector<std::string> packages;
     plangResolveImports(merged.get(), stdlibRoot, importError, &packages);
     if (importError) return false;
+    // 需要外部链接库：std.sqlite → -lsqlite3
+    for (const auto& pkg : packages)
+    {
+        if (pkg == "std.sqlite") needSqlite = true;
+    }
 
     std::cerr << "[dbg] resolve ok, decls=" << merged->decls.size() << std::endl;
     // 4) 语义分析
@@ -551,7 +565,8 @@ int main(int argc, char* argv[]) {
     std::cout << "compiling " << sources.size() << " file(s) -> " << obj << std::endl;
     std::string stdlibRoot = getStdlibRoot(argv[0]);
     std::vector<std::string> extraObjs;
-    if (!compileUnit(sources, keepIntermediate, obj, stdlibRoot, optLevel, extraObjs)) {
+    bool needSqlite = false;
+    if (!compileUnit(sources, keepIntermediate, obj, stdlibRoot, optLevel, extraObjs, needSqlite)) {
         return 1;
     }
     std::vector<std::string> objFiles = { obj };
@@ -577,7 +592,7 @@ int main(int argc, char* argv[]) {
     } else {
         // 默认：链接成可执行文件
         std::string exeName = outputName.empty() ? "a.out" : outputName;
-        bool success = linkExecutable(objFiles, exeName);
+        bool success = linkExecutable(objFiles, exeName, needSqlite);
         
         // 清理临时 .o（除非 --save-temps）
         if (!keepIntermediate) {
