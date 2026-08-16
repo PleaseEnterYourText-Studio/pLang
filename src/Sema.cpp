@@ -142,6 +142,19 @@ void Sema::visitProgram(ProgramNode* node)
                         }
                     }
                 }
+                // 登记结构体方法签名（obj.method() 解析用）
+                for (auto& m : structNode->members)
+                {
+                    if (m->type == ASTNodeType::FUNCTION_DECL)
+                    {
+                        auto* fn = dynamic_cast<FunctionDeclNode*>(m.get());
+                        std::vector<std::string> pt;
+                        for (auto& p : fn->params)
+                            pt.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+                        info.methods[fn->name] = { fn->returnType ? typeNodeToName(fn->returnType.get()) : "",
+                                                   std::move(pt) };
+                    }
+                }
                 structRegistry[structNode->name] = std::move(info);
             }
         }
@@ -208,6 +221,14 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     currentPackage = node->packageName;
     functionLabels.clear();
     duplicateLabels.clear();
+    if (!currentStruct.empty())
+    {
+        // 方法：注册 this（指向当前结构体实例）
+        auto thisSym = std::make_shared<Symbol>("this", SymbolKind::PARAMETER,
+                                                SymbolMutability::VAL, currentStruct,
+                                                node->line, node->column);
+        symbols.declare("this", thisSym);
+    }
 
     // 参数
     for (auto& param : node->params)
@@ -275,6 +296,15 @@ void Sema::visitStructDecl(StructDeclNode* node)
     symbols.pushScope();
     for (auto& member : node->members)
     {
+        if (member->type == ASTNodeType::FUNCTION_DECL)
+        {
+            // 方法体：以当前结构体为 this 作用域检查
+            std::string saved = currentStruct;
+            currentStruct = node->name;
+            visitFunctionDecl(dynamic_cast<FunctionDeclNode*>(member.get()));
+            currentStruct = saved;
+            continue;
+        }
         if (member->type == ASTNodeType::VARIABLE_DECL)
         {
             auto* varNode = dynamic_cast<VariableDeclNode*>(member.get());
@@ -310,6 +340,24 @@ void Sema::visitImplDecl(ImplDeclNode* node)
     if (!sym)
     {
         error(node->line, node->column, "impl target '" + target + "' is not defined");
+        return;
+    }
+    // 方法注册 + 体检查（带 this）
+    for (auto& member : node->members)
+    {
+        if (member->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(member.get());
+            std::vector<std::string> pt;
+            for (auto& p : fn->params)
+                pt.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+            structRegistry[target].methods[fn->name] =
+                { fn->returnType ? typeNodeToName(fn->returnType.get()) : "", std::move(pt) };
+            std::string saved = currentStruct;
+            currentStruct = target;
+            visitFunctionDecl(fn);
+            currentStruct = saved;
+        }
     }
 }
 
@@ -781,13 +829,39 @@ std::string Sema::visitCall(FunctionCallNode* node)
             error(node->line, node->column, "call to method on undefined object '" + objName + "'");
             return "";
         }
-        // 简化：方法返回值类型暂按结构体成员推导，这里返回 "int" 占位
-        // 后续接入结构体成员表后完善
+        // 静态方法调用 obj.method(args)：查结构体方法表
+        auto st = structRegistry.find(objSym->typeName);
+        if (st != structRegistry.end())
+        {
+            auto mIt = st->second.methods.find(methodName);
+            if (mIt != st->second.methods.end())
+            {
+                auto& [retType, paramTypes] = mIt->second;
+                if (node->arguments.size() != paramTypes.size())
+                {
+                    error(node->line, node->column, "method '" + methodName + "' expects " +
+                          std::to_string(paramTypes.size()) + " argument(s), got " +
+                          std::to_string(node->arguments.size()));
+                }
+                for (size_t i = 0; i < node->arguments.size() && i < paramTypes.size(); ++i)
+                {
+                    std::string at = visitExpr(node->arguments[i].get());
+                    if (!at.empty() && !paramTypes[i].empty() && !isCompatible(at, paramTypes[i]))
+                    {
+                        error(node->line, node->column, "argument " + std::to_string(i + 1) + " of method '" +
+                              methodName + "' expects '" + paramTypes[i] + "', got '" + at + "'");
+                    }
+                }
+                return retType;
+            }
+        }
+        // 非方法：按成员字段访问检查
         for (auto& arg : node->arguments)
         {
             visitExpr(arg.get());
         }
-        return "f64";
+        error(node->line, node->column, "struct '" + objSym->typeName + "' has no method '" + methodName + "'");
+        return "";
     }
 
     auto sym = symbols.lookup(node->name);

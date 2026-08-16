@@ -413,9 +413,32 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                 return generateThreadBuiltin(call);
             }
 
-            // 成员方法调用 obj.method() —— 结构体方法暂不完整实现
+            // 成员方法调用 obj.method(args)：静态分派到 <Struct>.<method>
             if (call->name.find('.') != std::string::npos) {
-                // 生成参数表达式但不调用
+                std::string objName = call->name.substr(0, call->name.find('.'));
+                std::string methodName = call->name.substr(call->name.find('.') + 1);
+                auto it = namedValues.find(objName);
+                if (it != namedValues.end() && it->second.type->isStructTy())
+                {
+                    std::string sname = structNameOf(it->second.type);
+                    llvm::Function* mf = module->getFunction(sname + "." + methodName);
+                    if (mf)
+                    {
+                        std::vector<llvm::Value*> margs;
+                        margs.push_back(it->second.ptr); // this = &obj
+                        for (size_t i = 0; i < call->arguments.size(); ++i)
+                        {
+                            llvm::Value* v = generateExpression(call->arguments[i].get());
+                            if (v && i + 1 < mf->getFunctionType()->getNumParams())
+                                v = coerceValue(v, mf->getFunctionType()->getParamType(i + 1));
+                            margs.push_back(v);
+                        }
+                        return builder.CreateCall(mf, margs, "methodCall");
+                    }
+                    std::cerr << "Error: method '" << methodName << "' of '" << sname << "' not found" << std::endl;
+                    return nullptr;
+                }
+                // 生成参数表达式但不调用（非结构体对象的方法，暂不支持）
                 for (auto& arg : call->arguments) {
                     generateExpression(arg.get());
                 }
@@ -884,7 +907,7 @@ void CodeGenerator::generateSwitch(SwitchStmtNode* node)
     builder.SetInsertPoint(mergeBB);
 }
 
-void CodeGenerator::generateFunction(FunctionDeclNode* fn)
+void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const std::string& structName)
 {
     if (!fn || !fn->body) return;
 
@@ -893,15 +916,17 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
         retType = getLLVMType(fn->returnType.get());
     }
 
+    std::string funcName = isMethod ? (structName + "." + fn->name) : fn->name;
     std::vector<llvm::Type*> paramTypes;
+    if (isMethod) paramTypes.push_back(llvm::PointerType::get(context, 0)); // this
     for (auto& param : fn->params) {
         paramTypes.push_back(getLLVMType(param->type.get()));
     }
 
-    llvm::Function* func = module->getFunction(fn->name);
+    llvm::Function* func = module->getFunction(funcName);
     if (!func) {
         llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, fn->isVariadic);
-        func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn->name, module.get());
+        func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, module.get());
     }
     currentFunction = func;
     setFunctionDebugInfo(func);
@@ -911,11 +936,25 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
     builder.SetCurrentDebugLocation(llvm::DebugLoc()); // 参数绑定不属于上一函数
     collectLabelBlocks(fn->body.get(), func);
 
-    // 参数绑定
-    size_t idx = 0;
+    // 参数绑定（方法首参为 this）
+    size_t argIdx = 0;
+    if (isMethod)
+    {
+        auto& thisArg = *func->arg_begin();
+        llvm::AllocaInst* thisAlloca = builder.CreateAlloca(thisArg.getType(), nullptr, "this");
+        builder.CreateStore(&thisArg, thisAlloca);
+        namedValues["this"] = VarInfo{thisAlloca, thisArg.getType()};
+        namedValueElementTypes["this"] = llvm::PointerType::get(context, 0);
+        if (!structName.empty() && structDefs.count(structName))
+        {
+            namedValueElementTypes["this"] = structDefs[structName].type; // this 指向结构体
+        }
+        argIdx = 1;
+    }
     for (auto& arg : func->args()) {
-        if (idx < fn->params.size()) {
-            auto* param = fn->params[idx].get();
+        size_t paramIdx = argIdx - (isMethod ? 1 : 0);
+        if ((!isMethod || argIdx >= 1) && paramIdx < fn->params.size()) {
+            auto* param = fn->params[paramIdx].get();
             llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, param->name);
             builder.CreateStore(&arg, alloca);
             namedValues[param->name] = VarInfo{alloca, arg.getType()};
@@ -924,7 +963,7 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
                 namedValueElementTypes[param->name] = getLLVMType(param->type->inner.get());
             }
         }
-        ++idx;
+        ++argIdx;
     }
 
     generateStatement(fn->body.get());
@@ -1071,6 +1110,34 @@ void CodeGenerator::generate(ProgramNode* root)
         else
         {
             def.type->setBody(fieldTypes);
+        }
+    }
+
+    // 发射结构体方法（Struct.method，带 this）
+    for (auto* sn : structDecls)
+    {
+        for (auto& m : sn->members)
+        {
+            if (m->type == ASTNodeType::FUNCTION_DECL)
+            {
+                generateFunction(dynamic_cast<FunctionDeclNode*>(m.get()), true, sn->name);
+            }
+        }
+    }
+    // 发射 impl 方法
+    for (auto& decl : root->decls)
+    {
+        if (decl->type == ASTNodeType::IMPL_DECL)
+        {
+            auto* impl = dynamic_cast<ImplDeclNode*>(decl.get());
+            std::string target = impl->target.substr(0, impl->target.find('.'));
+            for (auto& m : impl->members)
+            {
+                if (m->type == ASTNodeType::FUNCTION_DECL)
+                {
+                    generateFunction(dynamic_cast<FunctionDeclNode*>(m.get()), true, target);
+                }
+            }
         }
     }
 
@@ -1328,8 +1395,8 @@ void CodeGenerator::fillInitList(llvm::Value* ptr, llvm::Type* targetTy, BlockSt
             else if (fp && fty)
             {
                 llvm::Value* v = generateExpression(elem.get());
-                if (v && v->getType() != fty && fty->isIntegerTy() && v->getType()->isIntegerTy())
-                    v = builder.CreateIntCast(v, fty, true, "fieldCast");
+                if (v && v->getType() != fty)
+                    v = coerceValue(v, fty);
                 if (v) builder.CreateStore(v, fp);
             }
         }
@@ -1351,8 +1418,8 @@ void CodeGenerator::fillInitList(llvm::Value* ptr, llvm::Type* targetTy, BlockSt
             else
             {
                 llvm::Value* v = generateExpression(elem.get());
-                if (v && v->getType() != elemTy && elemTy->isIntegerTy() && v->getType()->isIntegerTy())
-                    v = builder.CreateIntCast(v, elemTy, true, "elemCast");
+                if (v && v->getType() != elemTy)
+                    v = coerceValue(v, elemTy);
                 if (v) builder.CreateStore(v, ep);
             }
         }
@@ -1368,10 +1435,21 @@ llvm::Value* CodeGenerator::getMemberAddress(const std::string& dottedName, llvm
     if (first == std::string::npos) return nullptr;
     std::string root = dottedName.substr(0, first);
     auto it = namedValues.find(root);
-    if (it == namedValues.end() || !it->second.type->isStructTy()) return nullptr;
+    if (it == namedValues.end()) return nullptr;
 
     llvm::Value* ptr = it->second.ptr;
     llvm::Type* curTy = it->second.type;
+    if (!curTy->isStructTy())
+    {
+        // 指针形式的根（this / 结构体指针变量）：指向结构体则先取指针值
+        auto eIt = namedValueElementTypes.find(root);
+        if (eIt != namedValueElementTypes.end() && eIt->second->isStructTy())
+        {
+            ptr = builder.CreateLoad(curTy, ptr, root);
+            curTy = eIt->second;
+        }
+        else return nullptr;
+    }
     std::string rest = dottedName.substr(first + 1);
     while (!rest.empty())
     {

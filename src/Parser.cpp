@@ -557,7 +557,16 @@ std::unique_ptr<ASTNode> Parser::parseImplDecl()
     expect(TokenType::LBRACE, "expected {");
     while (!check(TokenType::RBRACE) && !isAtEnd())
     {
-        implNode->members.push_back(parseStatement());
+        // 方法成员：pub/prt/pri 权限 + func
+        matchAny({TokenType::PUB, TokenType::PRT, TokenType::PRI});
+        if (check(TokenType::FUNC))
+        {
+            implNode->members.push_back(parseFunctionDecl());
+        }
+        else
+        {
+            implNode->members.push_back(parseStatement());
+        }
     }
     expect(TokenType::RBRACE, "expected }");
     return implNode;

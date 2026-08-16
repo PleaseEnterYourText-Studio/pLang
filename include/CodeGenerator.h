@@ -50,7 +50,8 @@ private:
     llvm::Value* getVariable(const std::string& name);
     llvm::Value* generateExpression(ASTNode* node);
     void generateStatement(ASTNode* node);
-    void generateFunction(FunctionDeclNode* fn);
+    void generateFunction(FunctionDeclNode* fn, bool isMethod = false,
+                           const std::string& structName = "");
 
     // 数组/指针下标 buf[i]：计算元素地址并返回元素类型
     llvm::Value* getIndexedAddress(IndexNode* node, llvm::Type*& elemType);
