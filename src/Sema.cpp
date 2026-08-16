@@ -497,6 +497,13 @@ std::string Sema::visitBinary(BinaryOpNode* node)
     std::string rightType = visitExpr(node->right.get());
     if (!leftType.empty() && !rightType.empty())
     {
+        // 指针算术：pointer +- int → pointer（按元素大小缩放）
+        bool leftPtr = leftType == "pointer" || leftType == "ptr";
+        bool rightPtr = rightType == "pointer" || rightType == "ptr";
+        if ((leftPtr && isNumericType(rightType)) || (rightPtr && isNumericType(leftType)))
+        {
+            return leftPtr ? leftType : rightType;
+        }
         if (!isNumericType(leftType) || !isNumericType(rightType))
         {
             error(node->line, node->column, "arithmetic on non-numeric types '" + leftType + "' and '" + rightType + "'");
@@ -510,11 +517,18 @@ std::string Sema::visitUnary(UnaryOpNode* node)
     std::string operandType = visitExpr(node->operand.get());
     if (node->op == UnaryOpType::DEREF)
     {
-        if (operandType != "pointer" && !operandType.empty())
+        if (operandType != "pointer" && operandType != "ptr" && !operandType.empty())
         {
             error(node->line, node->column, "cannot dereference non-pointer type '" + operandType + "'");
         }
-        return "int"; // 简化：解引用返回 int
+        // 类型化解引用：指针变量的指向类型
+        if (node->operand->type == ASTNodeType::VARIABLE_REF)
+        {
+            auto* ref = dynamic_cast<VariableRefNode*>(node->operand.get());
+            auto it = pointerElementTypes.find(ref->name);
+            if (it != pointerElementTypes.end()) return it->second;
+        }
+        return "int"; // 简化：未知元素类型按 int
     }
     return operandType;
 }

@@ -52,6 +52,9 @@ private:
     // 数组/指针下标 buf[i]：计算元素地址并返回元素类型
     llvm::Value* getIndexedAddress(IndexNode* node, llvm::Type*& elemType);
 
+    // 指针操作数的元素类型（变量已知指向类型时返回之，否则按 i8 字节寻址）
+    llvm::Type* pointerElementType(ASTNode* operandNode);
+
     // std.thread 内置调用生成
     llvm::Value* generateThreadBuiltin(FunctionCallNode* call);
     llvm::Function* getOrDeclareFunction(const std::string& name,

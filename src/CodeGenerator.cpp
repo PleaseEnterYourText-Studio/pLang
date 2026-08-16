@@ -178,6 +178,24 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             llvm::Type* commonTy = unifyOperands(left, right);
             bool isFloat = commonTy && commonTy->isFloatingPointTy();
 
+            // 指针算术：p + n / n + p / p - n（按元素大小 GEP 缩放）
+            if (bin->op == BinaryOpType::ADD || bin->op == BinaryOpType::SUB)
+            {
+                if (left->getType()->isPointerTy() && right->getType()->isIntegerTy())
+                {
+                    llvm::Type* elemTy = pointerElementType(bin->lift.get());
+                    llvm::Value* idx = right;
+                    if (bin->op == BinaryOpType::SUB) idx = builder.CreateNeg(idx, "negIdx");
+                    return builder.CreateGEP(elemTy, left, idx, "ptrAdd");
+                }
+                if (bin->op == BinaryOpType::ADD &&
+                    right->getType()->isPointerTy() && left->getType()->isIntegerTy())
+                {
+                    llvm::Type* elemTy = pointerElementType(bin->right.get());
+                    return builder.CreateGEP(elemTy, right, left, "ptrAdd");
+                }
+            }
+
             switch (bin->op) {
                 case BinaryOpType::ADD: return isFloat ? builder.CreateFAdd(left, right, "add") : builder.CreateAdd(left, right, "add");
                 case BinaryOpType::SUB: return isFloat ? builder.CreateFSub(left, right, "sub") : builder.CreateSub(left, right, "sub");
@@ -242,9 +260,10 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                     break;
                 }
                 case UnaryOpType::DEREF: {
-                    // 解引用 *p
+                    // 解引用 *p：按指向类型读取
                     if (operand) {
-                        return builder.CreateLoad(llvm::Type::getInt32Ty(context), operand, "deref");
+                        llvm::Type* loadTy = pointerElementType(unary->operand.get());
+                        return builder.CreateLoad(loadTy, operand, "deref");
                     }
                     break;
                 }
@@ -414,11 +433,11 @@ void CodeGenerator::generateStatement(ASTNode* node)
                     varType = it->second.type;
                 }
             } else if (assign->target->type == ASTNodeType::UNARY_OP) {
-                // 解引用赋值 *p = v
+                // 解引用赋值 *p = v：按指向类型存储
                 auto* unary = static_cast<UnaryOpNode*>(assign->target.get());
                 if (unary->op == UnaryOpType::DEREF) {
                     varPtr = generateExpression(unary->operand.get());
-                    varType = llvm::Type::getInt32Ty(context);
+                    varType = pointerElementType(unary->operand.get());
                 }
             } else if (assign->target->type == ASTNodeType::INDEX) {
                 // 数组下标赋值 buf[i] = v
@@ -857,6 +876,26 @@ llvm::Type* CodeGenerator::unifyOperands(llvm::Value*& left, llvm::Value*& right
     }
 
     return nullptr;
+}
+
+// 指针操作数的元素类型（变量已知指向类型时返回之，否则按 i8 字节寻址）
+llvm::Type* CodeGenerator::pointerElementType(ASTNode* operandNode)
+{
+    if (operandNode && operandNode->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = static_cast<VariableRefNode*>(operandNode);
+        auto it = namedValueElementTypes.find(ref->name);
+        if (it != namedValueElementTypes.end()) return it->second;
+    }
+    if (operandNode && operandNode->type == ASTNodeType::BINARY_OP)
+    {
+        // 指针算术表达式 p + n：取指针侧操作数的元素类型
+        auto* bin = static_cast<BinaryOpNode*>(operandNode);
+        llvm::Type* lt = pointerElementType(bin->lift.get());
+        llvm::Type* rt = pointerElementType(bin->right.get());
+        return lt->getPrimitiveSizeInBits() >= rt->getPrimitiveSizeInBits() ? lt : rt;
+    }
+    return llvm::Type::getInt8Ty(context);
 }
 
 // 数组/指针下标 buf[i]：计算元素地址并输出元素类型
