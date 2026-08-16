@@ -11,6 +11,8 @@
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 
 // 类型大小（字节）：用于 union 取最大字段
 static unsigned typeSizeBytes(llvm::Type* ty);
@@ -467,6 +469,13 @@ void CodeGenerator::generateStatement(ASTNode* node)
 {
     if (!node) return;
 
+    // DWARF：按语句行列设置调试位置
+    if (currentSubprogram)
+    {
+        builder.SetCurrentDebugLocation(
+            llvm::DILocation::get(context, node->line, node->column, currentSubprogram));
+    }
+
     switch (node->type) {
         case ASTNodeType::EXPRESSION_STMT: {
             auto* stmt = static_cast<ExpressionStmtNode*>(node);
@@ -895,9 +904,11 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
         func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn->name, module.get());
     }
     currentFunction = func;
+    setFunctionDebugInfo(func);
     labelBlocks.clear();
     llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(context, "entry", func);
     builder.SetInsertPoint(entryBB);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc()); // 参数绑定不属于上一函数
     collectLabelBlocks(fn->body.get(), func);
 
     // 参数绑定
@@ -925,6 +936,31 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
             builder.CreateRet(llvm::ConstantInt::get(retType, 0));
         }
     }
+}
+
+// 初始化 DWARF：模块标志 + DIBuilder + 编译单元（finalize 在 generate 末尾）
+void CodeGenerator::setupDebugInfo()
+{
+    module->addModuleFlag(llvm::Module::Warning, "Debug Info Version", llvm::DEBUG_METADATA_VERSION);
+    module->addModuleFlag(llvm::Module::Error, "Dwarf Version", 4);
+    if (!dib)
+    {
+        dib = new llvm::DIBuilder(*module);
+        auto* file = dib->createFile("main.plang", ".");
+        debugCU = dib->createCompileUnit(llvm::dwarf::DW_LANG_C, file, "PLang", false, "", 0);
+    }
+}
+
+// 为函数创建 DISubprogram 并设为当前（供 DebugLoc 引用）
+void CodeGenerator::setFunctionDebugInfo(llvm::Function* fn)
+{
+    if (!dib) return;
+    auto* file = dib->createFile("main.plang", ".");
+    auto* subTy = dib->createSubroutineType(dib->getOrCreateTypeArray({}));
+    currentSubprogram = dib->createFunction(debugCU, fn->getName(), fn->getName(), file, 0,
+                                            subTy, 0, llvm::DINode::FlagZero,
+                                            llvm::DISubprogram::SPFlagDefinition);
+    fn->setSubprogram(currentSubprogram);
 }
 
 // 运行 LLVM 优化管线（需先设置目标三元组与数据布局）
@@ -966,6 +1002,8 @@ void CodeGenerator::optimize(int optLevel)
 void CodeGenerator::generate(ProgramNode* root)
 {
     if (!root) return;
+
+    setupDebugInfo();
 
     // 预扫描：先建立结构体类型（两遍，支持结构体嵌套/前向引用）
     std::vector<StructDeclNode*> structDecls;
@@ -1093,9 +1131,11 @@ void CodeGenerator::generate(ProgramNode* root)
     llvm::Function* mainFunc = llvm::Function::Create(
         mainType, llvm::Function::ExternalLinkage, "main", module.get());
     currentFunction = mainFunc;
+    setFunctionDebugInfo(mainFunc);
     labelBlocks.clear();
     llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(context, "entry", mainFunc);
     builder.SetInsertPoint(entryBB);
+    builder.SetCurrentDebugLocation(llvm::DebugLoc());
     for (auto& decl : root->decls)
     {
         if (decl->type == ASTNodeType::FUNCTION_DECL)
@@ -1119,6 +1159,15 @@ void CodeGenerator::generate(ProgramNode* root)
 
     if (!builder.GetInsertBlock()->getTerminator()) {
         builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0)));
+    }
+
+    // 收尾 DWARF
+    currentSubprogram = nullptr;
+    if (dib)
+    {
+        dib->finalize();
+        delete dib;
+        dib = nullptr;
     }
 }
 
@@ -1529,6 +1578,7 @@ llvm::Value* CodeGenerator::generateThreadBuiltin(FunctionCallNode* call)
 
         llvm::BasicBlock* trampEntry = llvm::BasicBlock::Create(context, "entry", tramp);
         builder.SetInsertPoint(trampEntry);
+        builder.SetCurrentDebugLocation(llvm::DebugLoc()); // 蹦床不属于当前子程序
         // 共享内存线程：把参数转发给目标函数
         if (target->arg_size() > 0)
         {

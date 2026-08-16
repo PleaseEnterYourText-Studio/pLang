@@ -13,6 +13,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/raw_ostream.h"
@@ -83,6 +84,11 @@ private:
     // 递归填充初始化列表 {1, 2, {3, 4}}（结构体按字段、数组按元素，支持嵌套）
     void fillInitList(llvm::Value* ptr, llvm::Type* targetTy, BlockStmtNode* block);
 
+    // DWARF：DIBuilder 与当前子程序（generateStatement 设置 DebugLoc）
+    llvm::DIBuilder* dib = nullptr;
+    llvm::DICompileUnit* debugCU = nullptr;
+    llvm::DISubprogram* currentSubprogram = nullptr;
+
     // goto/label：函数内 label → 基本块（generateFunction 预建）
     std::unordered_map<std::string, llvm::BasicBlock*> labelBlocks;
     void collectLabelBlocks(ASTNode* node, llvm::Function* func);
@@ -109,6 +115,8 @@ public:
     ~CodeGenerator() = default;
 
     void generate(ProgramNode* root);
+    void setupDebugInfo();          // 模块级 DWARF 调试信息
+    void setFunctionDebugInfo(llvm::Function* fn);  // 为函数建 DISubprogram
     void optimize(int optLevel);    // LLVM 优化 pass（0=不优化）
     void printIR();
     void saveToFile(const std::string& filename);
