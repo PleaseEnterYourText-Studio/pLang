@@ -162,6 +162,8 @@ void Sema::visitProgram(ProgramNode* node)
                             pt.push_back(p->type ? typeNodeToName(p->type.get()) : "");
                         info.methods[fn->name] = { fn->returnType ? typeNodeToName(fn->returnType.get()) : "",
                                                    std::move(pt) };
+                        if (fn->name == ".construction") info.hasConstruction = true;
+                        if (fn->name == ".destroy") info.hasDestruction = true;
                     }
                 }
                 if (!structNode->typeParams.empty())

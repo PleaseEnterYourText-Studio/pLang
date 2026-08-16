@@ -50,6 +50,8 @@ private:
         std::unordered_map<std::string, std::string> fieldElementTypes; // 数组成员 → 元素类型
         // 方法：方法名 → {返回类型, 参数类型}
         std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>> methods;
+        bool hasConstruction = false;   // .construction()
+        bool hasDestruction = false;    // .destroy()
     };
     std::unordered_map<std::string, StructInfo> structRegistry;
     std::unordered_map<std::string, StructDeclNode*> genericTemplates;  // 泛型模板（名字 → 原声明）

@@ -71,6 +71,8 @@ private:
         std::vector<int> fieldBits;     // 位域宽度（0=普通字段）
         bool isUnion = false;           // union：所有字段共享同一内存
         int alignBytes = 0;             // 对齐（0=默认）
+        bool hasConstruction = false;   // .construction() 自动构造
+        bool hasDestruction = false;    // .destroy() 自动析构
     };
     std::unordered_map<std::string, StructDef> structDefs;
 

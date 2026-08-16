@@ -403,7 +403,17 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
     {
         expect(TokenType::FUNC, "expected func");
     }
+    // 特殊方法名（.construction/.destroy/.copy）：点号前缀
+    std::string specialPrefix;
+    if (match(TokenType::DOT))
+    {
+        specialPrefix = ".";
+    }
     Token name = expect(TokenType::IDENT, "expected function name");
+    if (!specialPrefix.empty())
+    {
+        name.text = specialPrefix + name.text;
+    }
 
     // 模板参数 <T: type> 或 <a: int>
     std::vector<std::string> typeParams;

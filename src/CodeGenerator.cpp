@@ -547,6 +547,16 @@ void CodeGenerator::generateStatement(ASTNode* node)
                     }
                 }
             }
+            // RAII：声明结构体变量后自动调用 .construction(&var)
+            if (varType->isStructTy())
+            {
+                std::string sname = structNameOf(varType);
+                if (!sname.empty() && structDefs[sname].hasConstruction)
+                {
+                    llvm::Function* ctor = module->getFunction(sname + "..construction");
+                    if (ctor) builder.CreateCall(ctor, {alloca}, "construct");
+                }
+            }
             break;
         }
 
@@ -623,7 +633,10 @@ void CodeGenerator::generateStatement(ASTNode* node)
 
         case ASTNodeType::BLOCK_STMT: {
             auto* block = static_cast<BlockStmtNode*>(node);
-            for (auto& stmt : block->statements) {
+            // 本块声明的可析构结构体（作用域退出逆序调 .destroy）
+            std::vector<std::pair<std::string, std::string>> destroyables;
+            for (auto& stmt : block->statements)
+            {
                 // 前一条语句已终结（return/goto）且当前不是 label：进入不可达块
                 if (builder.GetInsertBlock()->getTerminator() &&
                     stmt->type != ASTNodeType::LABEL_STMT)
@@ -632,7 +645,32 @@ void CodeGenerator::generateStatement(ASTNode* node)
                         context, "dead", builder.GetInsertBlock()->getParent());
                     builder.SetInsertPoint(deadBB);
                 }
+                if (stmt->type == ASTNodeType::VARIABLE_DECL)
+                {
+                    auto* vd = static_cast<VariableDeclNode*>(stmt.get());
+                    if (vd->type && vd->type->baseType == ASTNodeType::TYPE_PRIMITIVE)
+                    {
+                        auto dIt = structDefs.find(vd->type->name);
+                        if (dIt != structDefs.end() && dIt->second.hasDestruction)
+                        {
+                            destroyables.emplace_back(vd->name, vd->type->name);
+                        }
+                    }
+                }
                 generateStatement(stmt.get());
+            }
+            // RAII：作用域退出，逆序调用 .destroy(&var)
+            for (auto it = destroyables.rbegin(); it != destroyables.rend(); ++it)
+            {
+                if (!builder.GetInsertBlock()->getTerminator())
+                {
+                    llvm::Function* dtor = module->getFunction(it->second + "..destroy");
+                    auto nv = namedValues.find(it->first);
+                    if (dtor && nv != namedValues.end())
+                    {
+                        builder.CreateCall(dtor, {nv->second.ptr}, "destroy");
+                    }
+                }
             }
             break;
         }
@@ -1069,6 +1107,15 @@ void CodeGenerator::generate(ProgramNode* root)
         def.alignBytes = sn->alignBytes;
         for (auto& m : sn->members)
         {
+            if (m->type == ASTNodeType::FUNCTION_DECL)
+            {
+                auto* fn = dynamic_cast<FunctionDeclNode*>(m.get());
+                if (fn->name == ".construction") def.hasConstruction = true;
+                if (fn->name == ".destroy") def.hasDestruction = true;
+            }
+        }
+        for (auto& m : sn->members)
+        {
             if (m->type == ASTNodeType::VARIABLE_DECL)
             {
                 auto* field = dynamic_cast<VariableDeclNode*>(m.get());
@@ -1111,6 +1158,21 @@ void CodeGenerator::generate(ProgramNode* root)
         {
             def.type->setBody(fieldTypes);
         }
+    }
+
+    // 预扫描：创建所有函数对象（含 extern 声明），支持任意声明顺序的前向调用
+    for (auto& decl : root->decls)
+    {
+        if (decl->type != ASTNodeType::FUNCTION_DECL) continue;
+        auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+        if (!fn || fn->name == "main") continue;
+        if (module->getFunction(fn->name)) continue;
+        llvm::Type* retType = llvm::Type::getInt32Ty(context);
+        if (fn->returnType) retType = getLLVMType(fn->returnType.get());
+        std::vector<llvm::Type*> paramTypes;
+        for (auto& param : fn->params) paramTypes.push_back(getLLVMType(param->type.get()));
+        llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, fn->isVariadic);
+        llvm::Function::Create(ft, llvm::Function::ExternalLinkage, fn->name, module.get());
     }
 
     // 发射结构体方法（Struct.method，带 this）
