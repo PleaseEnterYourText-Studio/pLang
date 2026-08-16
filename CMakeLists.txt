@@ -72,7 +72,7 @@ endif()
 
 find_package(LLVM REQUIRED CONFIG)
 
-message(STATUS "✅ Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "   Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "   LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "   Include: ${LLVM_INCLUDE_DIRS}")
 
