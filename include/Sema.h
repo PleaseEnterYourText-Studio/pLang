@@ -43,6 +43,13 @@ private:
     std::unordered_map<std::string, std::string> arrayElementTypes;    // 数组变量 → 元素类型
     std::unordered_map<std::string, std::string> pointerElementTypes;  // 指针变量/参数 → 指向类型
 
+    // 结构体注册表：名字 → 成员（字段名 + 类型名）
+    struct StructInfo
+    {
+        std::vector<std::pair<std::string, std::string>> fields;
+    };
+    std::unordered_map<std::string, StructInfo> structRegistry;
+
 public:
     bool analyze(std::unique_ptr<ProgramNode>& program);
     const std::vector<SemaError>& getErrors() const { return errors; }

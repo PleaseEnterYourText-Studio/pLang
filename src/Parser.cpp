@@ -1153,6 +1153,20 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
 
 std::unique_ptr<ASTNode> Parser::parsePrimary()
 {
+    if (match(TokenType::LBRACE))
+    {
+        // 嵌套初始化列表 {{1,2},3} —— 与 parseInitList 结构一致
+        auto block = std::make_unique<BlockStmtNode>(previous().line, previous().column);
+        if (!check(TokenType::RBRACE))
+        {
+            do
+            {
+                block->statements.push_back(parseExpression());
+            } while (match(TokenType::COMMA));
+        }
+        expect(TokenType::RBRACE, "expected }");
+        return block;
+    }
     if (match(TokenType::NUMBER))
     {
         std::string text = previous().text;

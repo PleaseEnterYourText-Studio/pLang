@@ -94,12 +94,28 @@ llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
     } else if (typeName == "void") {
         return llvm::Type::getVoidTy(context);
     }
+    // 结构体类型（由 generate() 预扫描登记）
+    auto sIt = structDefs.find(typeName);
+    if (sIt != structDefs.end()) return sIt->second.type;
     return llvm::Type::getInt32Ty(context);
 }
 
 
 llvm::Value* CodeGenerator::getVariable(const std::string& name)
 {
+    // 结构体成员访问 s.x / a.b.c：逐级 GEP + load
+    size_t dot = name.find('.');
+    if (dot != std::string::npos)
+    {
+        llvm::Type* fieldTy = nullptr;
+        llvm::Value* fp = getMemberAddress(name, fieldTy);
+        if (fp && fieldTy) {
+            return builder.CreateLoad(fieldTy, fp, "member");
+        }
+        std::cerr << "Error: member access '" << name << "' failed" << std::endl;
+        return nullptr;
+    }
+
     auto it = namedValues.find(name);
     if (it != namedValues.end()) {
         return builder.CreateLoad(it->second.type, it->second.ptr, name);
@@ -216,6 +232,16 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             if (auto* addr = dynamic_cast<AddressOfNode*>(node)) {
                 if (addr->operand->type == ASTNodeType::VARIABLE_REF) {
                     auto* ref = static_cast<VariableRefNode*>(addr->operand.get());
+                    // &s.x / &a.b.c —— 结构体成员地址
+                    size_t dot = ref->name.find('.');
+                    if (dot != std::string::npos)
+                    {
+                        llvm::Type* fieldTy = nullptr;
+                        llvm::Value* fp = getMemberAddress(ref->name, fieldTy);
+                        if (fp) return fp;
+                        std::cerr << "Error: address-of member '" << ref->name << "' not found" << std::endl;
+                        return nullptr;
+                    }
                     auto it = namedValues.find(ref->name);
                     if (it != namedValues.end()) {
                         return it->second.ptr;
@@ -413,9 +439,19 @@ void CodeGenerator::generateStatement(ASTNode* node)
             namedValues[decl->name] = VarInfo{alloca, varType};
 
             if (decl->initializer) {
-                llvm::Value* initVal = generateExpression(decl->initializer.get());
-                if (initVal) {
-                    builder.CreateStore(initVal, alloca);
+                if (decl->initializer->type == ASTNodeType::BLOCK_STMT &&
+                    (varType->isStructTy() || varType->isArrayTy()))
+                {
+                    // 结构体/数组初始化列表：递归逐字段/元素填充（支持嵌套）
+                    auto* block = static_cast<BlockStmtNode*>(decl->initializer.get());
+                    fillInitList(alloca, varType, block);
+                }
+                else
+                {
+                    llvm::Value* initVal = generateExpression(decl->initializer.get());
+                    if (initVal) {
+                        builder.CreateStore(initVal, alloca);
+                    }
                 }
             }
             break;
@@ -427,10 +463,17 @@ void CodeGenerator::generateStatement(ASTNode* node)
             llvm::Type* varType = llvm::Type::getInt32Ty(context);
             if (assign->target->type == ASTNodeType::VARIABLE_REF) {
                 auto* ref = static_cast<VariableRefNode*>(assign->target.get());
-                auto it = namedValues.find(ref->name);
-                if (it != namedValues.end()) {
-                    varPtr = it->second.ptr;
-                    varType = it->second.type;
+                if (ref->name.find('.') != std::string::npos) {
+                    // 成员赋值 s.x = v
+                    llvm::Type* fieldTy = nullptr;
+                    varPtr = getMemberAddress(ref->name, fieldTy);
+                    varType = fieldTy ? fieldTy : llvm::Type::getInt32Ty(context);
+                } else {
+                    auto it = namedValues.find(ref->name);
+                    if (it != namedValues.end()) {
+                        varPtr = it->second.ptr;
+                        varType = it->second.type;
+                    }
                 }
             } else if (assign->target->type == ASTNodeType::UNARY_OP) {
                 // 解引用赋值 *p = v：按指向类型存储
@@ -702,6 +745,55 @@ void CodeGenerator::generate(ProgramNode* root)
 {
     if (!root) return;
 
+    // 预扫描：先建立结构体类型（两遍，支持结构体嵌套/前向引用）
+    std::vector<StructDeclNode*> structDecls;
+    for (auto& decl : root->decls)
+    {
+        StructDeclNode* sn = nullptr;
+        if (decl->type == ASTNodeType::STRUCT_DECL) sn = dynamic_cast<StructDeclNode*>(decl.get());
+        else if (decl->type == ASTNodeType::USING_DECL)
+        {
+            auto* u = dynamic_cast<UsingDeclNode*>(decl.get());
+            if (u->aliased && u->aliased->type == ASTNodeType::STRUCT_DECL)
+                sn = dynamic_cast<StructDeclNode*>(u->aliased.get());
+        }
+        if (sn && !sn->name.empty() && !structDefs.count(sn->name))
+        {
+            structDecls.push_back(sn);
+            structDefs[sn->name] = StructDef{llvm::StructType::create(context, sn->name), {}};
+        }
+    }
+    for (auto* sn : structDecls)
+    {
+        auto& def = structDefs[sn->name];
+        for (auto& m : sn->members)
+        {
+            if (m->type == ASTNodeType::VARIABLE_DECL)
+            {
+                auto* field = dynamic_cast<VariableDeclNode*>(m.get());
+                if (field->type)
+                {
+                    def.fieldNames.push_back(field->name);
+                }
+            }
+        }
+    }
+    // 第二遍：按字段类型填充（此时所有结构体类型已存在，支持嵌套/前向引用）
+    for (auto* sn : structDecls)
+    {
+        auto& def = structDefs[sn->name];
+        std::vector<llvm::Type*> fieldTypes;
+        for (auto& m : sn->members)
+        {
+            if (m->type == ASTNodeType::VARIABLE_DECL)
+            {
+                auto* field = dynamic_cast<VariableDeclNode*>(m.get());
+                fieldTypes.push_back(field->type ? getLLVMType(field->type.get()) : llvm::Type::getInt32Ty(context));
+            }
+        }
+        def.type->setBody(fieldTypes);
+    }
+
     // 先收集所有函数定义（不含 main，main 单独处理保证入口）
     for (auto& decl : root->decls)
     {
@@ -896,6 +988,115 @@ llvm::Type* CodeGenerator::pointerElementType(ASTNode* operandNode)
         return lt->getPrimitiveSizeInBits() >= rt->getPrimitiveSizeInBits() ? lt : rt;
     }
     return llvm::Type::getInt8Ty(context);
+}
+
+// 递归填充初始化列表 {1, 2, {3, 4}}（结构体按字段、数组按元素，支持嵌套）
+void CodeGenerator::fillInitList(llvm::Value* ptr, llvm::Type* targetTy, BlockStmtNode* block)
+{
+    if (targetTy->isStructTy())
+    {
+        std::string sname = structNameOf(targetTy);
+        if (sname.empty()) return;
+        auto& def = structDefs[sname];
+        size_t n = std::min(block->statements.size(), def.fieldNames.size());
+        for (size_t i = 0; i < n; ++i)
+        {
+            llvm::Type* fty = nullptr;
+            llvm::Value* fp = getStructFieldPtr(ptr, sname, def.fieldNames[i], fty);
+            auto& elem = block->statements[i];
+            if (fp && fty && elem->type == ASTNodeType::BLOCK_STMT &&
+                (fty->isStructTy() || fty->isArrayTy()))
+            {
+                fillInitList(fp, fty, static_cast<BlockStmtNode*>(elem.get()));
+            }
+            else if (fp && fty)
+            {
+                llvm::Value* v = generateExpression(elem.get());
+                if (v && v->getType() != fty && fty->isIntegerTy() && v->getType()->isIntegerTy())
+                    v = builder.CreateIntCast(v, fty, true, "fieldCast");
+                if (v) builder.CreateStore(v, fp);
+            }
+        }
+    }
+    else if (targetTy->isArrayTy())
+    {
+        llvm::Type* elemTy = targetTy->getArrayElementType();
+        size_t n = std::min(block->statements.size(), (size_t)targetTy->getArrayNumElements());
+        for (size_t i = 0; i < n; ++i)
+        {
+            auto& elem = block->statements[i];
+            llvm::Value* ep = builder.CreateGEP(targetTy, ptr,
+                {builder.getInt64(0), builder.getInt64((int64_t)i)}, "elemPtr");
+            if (elem->type == ASTNodeType::BLOCK_STMT &&
+                (elemTy->isStructTy() || elemTy->isArrayTy()))
+            {
+                fillInitList(ep, elemTy, static_cast<BlockStmtNode*>(elem.get()));
+            }
+            else
+            {
+                llvm::Value* v = generateExpression(elem.get());
+                if (v && v->getType() != elemTy && elemTy->isIntegerTy() && v->getType()->isIntegerTy())
+                    v = builder.CreateIntCast(v, elemTy, true, "elemCast");
+                if (v) builder.CreateStore(v, ep);
+            }
+        }
+    }
+}
+
+// 多级成员地址解析 a.b.c：逐级 GEP，输出最终字段类型
+llvm::Value* CodeGenerator::getMemberAddress(const std::string& dottedName, llvm::Type*& fieldType)
+{
+    fieldType = nullptr;
+    size_t first = dottedName.find('.');
+    if (first == std::string::npos) return nullptr;
+    std::string root = dottedName.substr(0, first);
+    auto it = namedValues.find(root);
+    if (it == namedValues.end() || !it->second.type->isStructTy()) return nullptr;
+
+    llvm::Value* ptr = it->second.ptr;
+    llvm::Type* curTy = it->second.type;
+    std::string rest = dottedName.substr(first + 1);
+    while (!rest.empty())
+    {
+        size_t next = rest.find('.');
+        std::string member = (next == std::string::npos) ? rest : rest.substr(0, next);
+        rest = (next == std::string::npos) ? "" : rest.substr(next + 1);
+        std::string sname = structNameOf(curTy);
+        llvm::Type* fty = nullptr;
+        ptr = getStructFieldPtr(ptr, sname, member, fty);
+        if (!ptr || !fty) return nullptr;
+        curTy = fty;
+    }
+    fieldType = curTy;
+    return ptr;
+}
+
+// 由 LLVM 结构体类型反查注册表名字
+std::string CodeGenerator::structNameOf(llvm::Type* structType)
+{
+    for (auto& [name, def] : structDefs)
+    {
+        if (def.type == structType) return name;
+    }
+    return "";
+}
+
+// 取结构体字段地址（GEP），并输出字段类型
+llvm::Value* CodeGenerator::getStructFieldPtr(llvm::Value* structPtr, const std::string& structName,
+                                              const std::string& fieldName, llvm::Type*& fieldType)
+{
+    auto it = structDefs.find(structName);
+    if (it == structDefs.end()) return nullptr;
+    for (size_t i = 0; i < it->second.fieldNames.size(); ++i)
+    {
+        if (it->second.fieldNames[i] == fieldName)
+        {
+            fieldType = it->second.type->getElementType(i);
+            return builder.CreateGEP(it->second.type, structPtr,
+                                     {builder.getInt32(0), builder.getInt32((int)i)}, fieldName);
+        }
+    }
+    return nullptr;
 }
 
 // 数组/指针下标 buf[i]：计算元素地址并输出元素类型

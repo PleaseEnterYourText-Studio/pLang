@@ -55,6 +55,25 @@ private:
     // 指针操作数的元素类型（变量已知指向类型时返回之，否则按 i8 字节寻址）
     llvm::Type* pointerElementType(ASTNode* operandNode);
 
+    // 结构体类型注册表：名字 → LLVM 结构体类型 + 字段名（按声明顺序）
+    struct StructDef
+    {
+        llvm::StructType* type;
+        std::vector<std::string> fieldNames;
+    };
+    std::unordered_map<std::string, StructDef> structDefs;
+
+    // 取结构体字段地址（GEP），并输出字段类型
+    llvm::Value* getStructFieldPtr(llvm::Value* structPtr, const std::string& structName,
+                                   const std::string& fieldName, llvm::Type*& fieldType);
+    // 多级成员地址解析 a.b.c：逐级 GEP，输出最终字段类型
+    llvm::Value* getMemberAddress(const std::string& dottedName, llvm::Type*& fieldType);
+    // 由 LLVM 结构体类型反查注册表名字
+    std::string structNameOf(llvm::Type* structType);
+
+    // 递归填充初始化列表 {1, 2, {3, 4}}（结构体按字段、数组按元素，支持嵌套）
+    void fillInitList(llvm::Value* ptr, llvm::Type* targetTy, BlockStmtNode* block);
+
     // std.thread 内置调用生成
     llvm::Value* generateThreadBuiltin(FunctionCallNode* call);
     llvm::Function* getOrDeclareFunction(const std::string& name,

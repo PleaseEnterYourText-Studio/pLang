@@ -20,6 +20,7 @@ bool Sema::analyze(std::unique_ptr<ProgramNode>& program)
     warnings.clear();
     arrayElementTypes.clear();
     pointerElementTypes.clear();
+    structRegistry.clear();
     visitProgram(program.get());
     return errors.empty();
 }
@@ -88,6 +89,20 @@ void Sema::visitProgram(ProgramNode* node)
             {
                 error(structNode->line, structNode->column, "duplicate type '" + structNode->name + "'");
             }
+            // 登记结构体字段（成员访问 s.x 用）
+            StructInfo info;
+            for (auto& m : structNode->members)
+            {
+                if (m->type == ASTNodeType::VARIABLE_DECL)
+                {
+                    auto* field = dynamic_cast<VariableDeclNode*>(m.get());
+                    if (field->type)
+                    {
+                        info.fields.emplace_back(field->name, typeNodeToName(field->type.get()));
+                    }
+                }
+            }
+            structRegistry[structNode->name] = std::move(info);
         }
         else if (decl->type == ASTNodeType::USING_DECL)
         {
@@ -103,6 +118,20 @@ void Sema::visitProgram(ProgramNode* node)
                 {
                     error(structNode->line, structNode->column, "duplicate type '" + structNode->name + "'");
                 }
+                // 登记结构体字段
+                StructInfo info;
+                for (auto& m : structNode->members)
+                {
+                    if (m->type == ASTNodeType::VARIABLE_DECL)
+                    {
+                        auto* field = dynamic_cast<VariableDeclNode*>(m.get());
+                        if (field->type)
+                        {
+                            info.fields.emplace_back(field->name, typeNodeToName(field->type.get()));
+                        }
+                    }
+                }
+                structRegistry[structNode->name] = std::move(info);
             }
         }
         else if (decl->type == ASTNodeType::EXTERN_VAR_DECL)
@@ -786,6 +815,36 @@ std::string Sema::visitVariableRef(VariableRefNode* node)
     {
         error(node->line, node->column, "use of moved variable '" + root + "'");
         return sym->typeName; // 仍返回真实类型，避免级联误报
+    }
+    // 结构体成员访问 s.x / a.b.c：逐级解析成员类型
+    size_t dot = node->name.find('.');
+    if (dot != std::string::npos)
+    {
+        std::string curType = sym->typeName;
+        std::string rest = node->name.substr(dot + 1);
+        while (!rest.empty())
+        {
+            size_t next = rest.find('.');
+            std::string member = (next == std::string::npos) ? rest : rest.substr(0, next);
+            rest = (next == std::string::npos) ? "" : rest.substr(next + 1);
+            auto st = structRegistry.find(curType);
+            if (st == structRegistry.end())
+            {
+                error(node->line, node->column, "'" + curType + "' is not a struct");
+                return "";
+            }
+            bool found = false;
+            for (auto& f : st->second.fields)
+            {
+                if (f.first == member) { curType = f.second; found = true; break; }
+            }
+            if (!found)
+            {
+                error(node->line, node->column, "struct '" + curType + "' has no member '" + member + "'");
+                return "";
+            }
+        }
+        return curType;
     }
     return sym->typeName;
 }
