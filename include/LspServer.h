@@ -77,6 +77,7 @@ private:
     llvm::json::Value getSymbols(const std::string& uri);
     llvm::json::Value getHover(const std::string& uri, int line, int character);
     llvm::json::Value getCompletion(const std::string& uri, int line, int character);
+    llvm::json::Value getRename(const std::string& uri, int line, int character, const std::string& newName);
     llvm::json::Value getDiagnostics(const std::string& uri);
 
     // 辅助

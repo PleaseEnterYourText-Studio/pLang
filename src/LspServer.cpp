@@ -369,6 +369,7 @@ llvm::json::Object LspServer::initialize(const llvm::json::Value& params)
     capabilities["textDocumentSync"] = 1; // 全量同步
     capabilities["definitionProvider"] = true;
     capabilities["documentSymbolProvider"] = true;
+    capabilities["renameProvider"] = true;
     capabilities["semanticTokensProvider"] = llvm::json::Object{
         {"legend", llvm::json::Object{
             {"tokenTypes", llvm::json::Array{"keyword", "type", "namespace", "function",
@@ -521,6 +522,61 @@ llvm::json::Value LspServer::getCompletion(const std::string& uri, int line, int
         {"isIncomplete", false},
         {"items", llvm::json::Value(std::move(items))},
     };
+}
+
+// 重命名：收集文档中该标识符的所有出现（跳过注释与字符串），生成 WorkspaceEdit
+llvm::json::Value LspServer::getRename(const std::string& uri, int line, int character, const std::string& newName)
+{
+    auto it = documents.find(uri);
+    if (it == documents.end()) return nullptr;
+
+    DocumentState& doc = *it->second;
+    std::string name = findSymbolNameAt(doc, line, character);
+    if (name.empty() || newName.empty()) return nullptr;
+
+    llvm::json::Array edits;
+    std::istringstream stream(doc.text);
+    std::string cur;
+    for (int ln = 0; std::getline(stream, cur); ++ln)
+    {
+        bool inStr = false;
+        for (int i = 0; i < (int)cur.size(); ++i)
+        {
+            char c = cur[i];
+            if (inStr)
+            {
+                if (c == '\\') ++i;   // 转义：跳过下一字符
+                else if (c == '"') inStr = false;
+                continue;
+            }
+            if (c == '"')
+            {
+                inStr = true;
+                continue;
+            }
+            if (c == '/' && i + 1 < (int)cur.size() && cur[i + 1] == '/') break; // 行注释
+            if (std::isalnum(c) || c == '_')
+            {
+                int start = i;
+                while (i < (int)cur.size() && (std::isalnum(cur[i]) || cur[i] == '_')) ++i;
+                if (cur.substr(start, i - start) == name)
+                {
+                    llvm::json::Object edit;
+                    edit["range"] = llvm::json::Object{
+                        {"start", llvm::json::Object{{"line", ln}, {"character", start}}},
+                        {"end", llvm::json::Object{{"line", ln}, {"character", i}}},
+                    };
+                    edit["newText"] = newName;
+                    edits.push_back(llvm::json::Value(std::move(edit)));
+                }
+                --i;
+            }
+        }
+    }
+    if (edits.empty()) return nullptr;
+    llvm::json::Object changes;
+    changes[uri] = llvm::json::Value(std::move(edits));
+    return llvm::json::Value(llvm::json::Object{{"changes", llvm::json::Value(std::move(changes))}});
 }
 
 llvm::json::Value LspServer::getSymbols(const std::string& uri)
@@ -708,6 +764,18 @@ llvm::json::Value LspServer::handleRequest(const std::string& method, const llvm
         int character = (int)*pos->getInteger("character");
         if (!uri) return nullptr;
         return getHover(uri->str(), line, character);
+    }
+    if (method == "textDocument/rename")
+    {
+        auto* obj = params.getAsObject();
+        auto* td = obj->getObject("textDocument");
+        auto uri = td->getString("uri");
+        auto* pos = obj->getObject("position");
+        int line = (int)*pos->getInteger("line");
+        int character = (int)*pos->getInteger("character");
+        auto newName = obj->getString("newName");
+        if (!uri || !newName) return nullptr;
+        return getRename(uri->str(), line, character, newName->str());
     }
     if (method == "textDocument/documentSymbol")
     {
