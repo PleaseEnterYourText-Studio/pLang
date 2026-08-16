@@ -398,8 +398,13 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             }
 
             std::vector<llvm::Value*> args;
-            for (auto& arg : call->arguments) {
-                args.push_back(generateExpression(arg.get()));
+            for (size_t i = 0; i < call->arguments.size(); ++i) {
+                llvm::Value* v = generateExpression(call->arguments[i].get());
+                if (v && i < func->getFunctionType()->getNumParams()) {
+                    llvm::Type* paramTy = func->getFunctionType()->getParamType(i);
+                    v = coerceValue(v, paramTy);
+                }
+                args.push_back(v);
             }
 
             return builder.CreateCall(func, args, "call");
@@ -968,6 +973,22 @@ llvm::Type* CodeGenerator::unifyOperands(llvm::Value*& left, llvm::Value*& right
     }
 
     return nullptr;
+}
+
+// 调用点参数类型转换（C 式隐式转换）
+llvm::Value* CodeGenerator::coerceValue(llvm::Value* val, llvm::Type* targetTy)
+{
+    if (!val || val->getType() == targetTy) return val;
+    llvm::Type* srcTy = val->getType();
+    if (srcTy->isIntegerTy() && targetTy->isIntegerTy())
+        return builder.CreateIntCast(val, targetTy, true, "argCast");
+    if (srcTy->isIntegerTy() && targetTy->isFloatingPointTy())
+        return builder.CreateSIToFP(val, targetTy, "argCast");
+    if (srcTy->isFloatingPointTy() && targetTy->isFloatingPointTy())
+        return builder.CreateFPCast(val, targetTy, "argCast");
+    if (srcTy->isFloatingPointTy() && targetTy->isIntegerTy())
+        return builder.CreateFPToSI(val, targetTy, "argCast");
+    return val;
 }
 
 // 指针操作数的元素类型（变量已知指向类型时返回之，否则按 i8 字节寻址）

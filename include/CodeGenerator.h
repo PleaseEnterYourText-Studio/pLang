@@ -55,6 +55,9 @@ private:
     // 指针操作数的元素类型（变量已知指向类型时返回之，否则按 i8 字节寻址）
     llvm::Type* pointerElementType(ASTNode* operandNode);
 
+    // 调用点参数类型转换（C 式隐式转换）
+    llvm::Value* coerceValue(llvm::Value* val, llvm::Type* targetTy);
+
     // 结构体类型注册表：名字 → LLVM 结构体类型 + 字段名（按声明顺序）
     struct StructDef
     {
