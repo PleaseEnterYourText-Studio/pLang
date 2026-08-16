@@ -358,18 +358,6 @@ switch (n) {             // 整数 switch
 }
 ```
 
-### 原子操作与 volatile
-`std.atomic` 提供 `load/store/add/sub/exchange/cas`，可选内存序参数
-（0=relaxed、1=acquire、2=release、3=acq_rel、4=seq_cst，默认 seq_cst）：
-```plang
-import std.atomic;
-var: int counter = 0;
-var -> var: int p = &counter;
-var: int old = atomic.add(p, 1);   // 原子自增，返回旧值
-var: bool ok = atomic.cas(p, 1, 2);
-```
-`volatile var: int flag = 0;` 声明 volatile 变量（读写不走缓存优化）。
-
 ### 借用检查（悬垂返回检测）
 返回局部变量地址在编译期报错（D5 基础）：
 ```plang
@@ -625,3 +613,157 @@ func main() : int {
     return 0;
 }
 ```
+
+# 堆内存 (std.mem)
+
+`std.mem` extern 直通 libc 分配器，配合指针算术使用：
+
+- `mem.malloc(n)`: 分配 `n` 字节，返回指针（失败返回 `null`）.
+- `mem.free(p)`: 释放内存.
+- `mem.memcpy(dst, src, n)`: 复制 `n` 字节.
+- `mem.memset(dst, value, n)`: 将 `n` 字节设为 `value`.
+- `mem.memcmp(a, b, n)`: 比较 `n` 字节，返回 0/负数/正数.
+
+```plang
+import std.io;
+import std.mem;
+
+func main() : int {
+    var -> var: int p = mem.malloc(16);   // 4 个 int
+    if (p == null) return 1;
+    p[0] = 10;
+    p[1] = 20;
+    io.printInt(p[0] + p[1]);   // 30
+    io.println("");
+    mem.free(p);
+    return 0;
+}
+```
+
+> `n` 为字节数；按元素访问需自行乘元素大小（`int` 为 4 字节）。
+
+# 原子操作与 volatile
+
+## 原子操作 (std.atomic)
+
+`std.atomic` 是编译器内置（LLVM atomicrmw/cmpxchg），用于多线程共享计数器/标志：
+
+- `atomic.load(p)`: 原子读取.
+- `atomic.store(p, v)`: 原子写入.
+- `atomic.add(p, v)` / `atomic.sub(p, v)`: 原子加/减，**返回旧值**.
+- `atomic.exchange(p, v)`: 原子交换，返回旧值.
+- `atomic.cas(p, expect, desired)`: 比较交换，返回是否成功（bool）.
+
+内存序参数（可选，最后一个）：`0`=relaxed、`1`=acquire、`2`=release、`3`=acq_rel、`4`=seq_cst（默认）。
+`p` 必须是指向整数类型的指针。
+
+```plang
+import std.atomic;
+var: int counter = 0;
+var -> var: int p = &counter;
+var: int old = atomic.add(p, 1);   // 原子自增，返回旧值
+var: bool ok = atomic.cas(p, 1, 2);
+```
+
+## volatile 变量
+
+`volatile var: int flag = 0;` —— 对该变量的读写不走缓存优化（LLVM volatile load/store），用于与外部/中断交互。
+
+```plang
+volatile var: int flag = 0;
+flag = 1;          // volatile store
+var: int v = flag; // volatile load
+```
+
+# 可选值与错误处理 (std.option / std.result)
+
+库级安全基础，用泛型结构体实现（完整编译期检查需类型系统后续支持）。
+
+## std.option
+
+`Option<T>` 表示"可能有值，也可能没有"：
+
+- `isSome`: 是否包含值（bool）.
+- `value`: 值（`isSome=false` 时无效）.
+
+```plang
+import std.option;
+var: Option<int> some = {true, 42};
+var: Option<int> none = {false, 0};
+if (some.isSome) { io.printInt(some.value); }   // 42
+if (!none.isSome) { io.println("none"); }
+```
+
+## std.result
+
+`Result<T, E>` 表示"成功携带值，或失败携带错误码"：
+
+- `isOk`: 是否成功（bool）.
+- `value`: 成功值（`isOk=false` 时无效）.
+- `error`: 错误码（`isOk=true` 时无效）.
+
+```plang
+import std.result;
+func divide(a: int, b: int) -> Result<int, int> {
+    if (b == 0) { return {false, 0, 1}; }   // Err(1)
+    return {true, a / b, 0};                // Ok(a/b)
+}
+var: Result<int, int> r = divide(10, 2);   // r.isOk=true, r.value=5
+```
+
+> `?` 传播运算符尚未实现；错误处理目前为显式分支检查.
+
+# 动态数组 (std.vector)
+
+`Vec<T>` 是泛型结构体（堆内存），可变长数组，自动扩容：
+
+- `vector.new<T>(cap)`: 创建空 Vec（预留 `cap` 容量），返回 `Vec<T>`.
+- `vector.push<T>(&v, item)`: 末尾追加（容量不足自动翻倍）.
+- `vector.get<T>(&v, i)`: 取第 `i` 个元素（不做越界检查）.
+- `vector.len<T>(&v)`: 元素个数.
+- `vector.pop<T>(&v)`: 弹出并返回末尾元素.
+- `vector.destroy<T>(&v)`: 释放堆内存.
+
+```plang
+import std.vector;
+var: Vec<int> v = vector.new<int>(2);
+vector.push<int>(&v, 10);
+vector.push<int>(&v, 20);
+vector.push<int>(&v, 30);        // 触发扩容
+io.printInt(vector.len<int>(&v));  // 3
+vector.destroy<int>(&v);
+```
+
+> 泛型结构体方法暂不克隆，故以自由泛型函数 `vector.xxx<T>(&v, ...)` 形式提供；
+> `sizeof(T)` 用于按元素大小分配内存.
+
+# 数据库 (std.sqlite)
+
+SQLite 数据库绑定（extern FFI 直通 libc sqlite3，**自动链接 `-lsqlite3`**，无需手动配置）：
+
+- `sqlite.open(path)`: 打开/创建数据库文件，成功返回句柄，失败返回 `null`.
+- `sqlite.close(db)`: 关闭数据库.
+- `sqlite.exec(db, sql)`: 执行无返回的 SQL（CREATE/INSERT/UPDATE/DELETE），0=成功.
+- `sqlite.query(db, sql)`: 查询并逐行打印结果（列以 `|` 分隔）；失败打印错误信息.
+
+```plang
+import std.io;
+import std.sqlite;
+
+func main() : int {
+    var -> var: ptr db = sqlite.open("test.db");
+    if (db == null) { io.println("open failed"); return 1; }
+
+    sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT)");
+    sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice')");
+    sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob')");
+
+    sqlite.query(db, "SELECT * FROM user");   // 输出：1|Alice  2|Bob
+
+    sqlite.close(db);
+    return 0;
+}
+```
+
+> 内部使用 prepared statement（`sqlite3_prepare_v2`），`query` 以文本形式打印各列；
+> 后续可扩展按列取值 API（`columnInt`/`columnText`）.
