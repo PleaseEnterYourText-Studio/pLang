@@ -465,6 +465,64 @@ llvm::json::Value LspServer::getHover(const std::string& uri, int line, int char
     return nullptr;
 }
 
+llvm::json::Value LspServer::getCompletion(const std::string& uri, int line, int character)
+{
+    auto it = documents.find(uri);
+    if (it == documents.end()) return nullptr;
+    DocumentState& doc = *it->second;
+
+    // 当前行与前缀
+    std::string lineText;
+    std::istringstream stream(doc.text);
+    std::string cur;
+    for (int i = 0; i <= line; ++i)
+    {
+        if (!std::getline(stream, cur)) break;
+        lineText = cur;
+    }
+    int start = character;
+    while (start > 0 && (std::isalnum(lineText[start - 1]) || lineText[start - 1] == '_')) start--;
+    std::string prefix = lineText.substr(start, character - start);
+
+    llvm::json::Array items;
+    // 符号补全（本文件 + 合并的标准库）
+    for (const auto& sym : doc.symbols)
+    {
+        if (prefix.empty() || sym.name.rfind(prefix, 0) == 0)
+        {
+            int lspKind = 6; // function
+            if (sym.kind == "variable" || sym.kind == "parameter") lspKind = 6;
+            else if (sym.kind == "type" || sym.kind == "struct") lspKind = 7;
+            items.push_back(llvm::json::Object{
+                {"label", sym.name},
+                {"kind", lspKind},
+                {"detail", sym.kind},
+            });
+        }
+    }
+    // 关键字补全
+    static const std::vector<std::string> keywords = {
+        "func", "var", "val", "if", "else", "while", "for", "return",
+        "struct", "using", "import", "package", "pub", "switch", "case",
+        "goto", "label", "thread", "io", "mem", "atomic", "null", "as"
+    };
+    for (const auto& kw : keywords)
+    {
+        if (prefix.empty() || kw.rfind(prefix, 0) == 0)
+        {
+            items.push_back(llvm::json::Object{
+                {"label", kw},
+                {"kind", 14}, // keyword
+                {"detail", "keyword"},
+            });
+        }
+    }
+    return llvm::json::Object{
+        {"isIncomplete", false},
+        {"items", llvm::json::Value(std::move(items))},
+    };
+}
+
 llvm::json::Value LspServer::getSymbols(const std::string& uri)
 {
     auto it = documents.find(uri);
@@ -628,6 +686,17 @@ llvm::json::Value LspServer::handleRequest(const std::string& method, const llvm
         int character = (int)*pos->getInteger("character");
         if (!uri) return nullptr;
         return findDefinition(uri->str(), line, character);
+    }
+    if (method == "textDocument/completion")
+    {
+        auto* obj = params.getAsObject();
+        auto* td = obj->getObject("textDocument");
+        auto uri = td->getString("uri");
+        auto* pos = obj->getObject("position");
+        int line = (int)*pos->getInteger("line");
+        int character = (int)*pos->getInteger("character");
+        if (!uri) return nullptr;
+        return getCompletion(uri->str(), line, character);
     }
     if (method == "textDocument/hover")
     {

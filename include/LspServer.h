@@ -76,6 +76,7 @@ private:
     llvm::json::Value getSemanticTokens(const std::string& uri);
     llvm::json::Value getSymbols(const std::string& uri);
     llvm::json::Value getHover(const std::string& uri, int line, int character);
+    llvm::json::Value getCompletion(const std::string& uri, int line, int character);
     llvm::json::Value getDiagnostics(const std::string& uri);
 
     // 辅助
