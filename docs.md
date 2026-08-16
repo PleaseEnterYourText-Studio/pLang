@@ -1,3 +1,11 @@
+# PLang 语言文档
+
+> **实现状态**：本文为语言设计文档。已实现：指针/数组、结构体/联合/位域/对齐、泛型结构体与泛型函数、sizeof、RAII（construction/destroy）、
+> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector）。
+> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、`std.string` 库、模板函数自动生成、`?` 错误传播。
+> 编译器：LLVM 优化（-O0~-O3）、DWARF 调试信息、错误恢复、独立编译单元、LSP（悬停/补全/跳转/重命名）。
+> 标准库通过 `import std.xxx` 独立编译为 `.o` 并与用户程序链接，见 `stdlib.md`。
+
 # 包
 ## 包的声明
 一个目录为一个包, 目录内所有 `.plang` 源文件同属一个包.
@@ -303,7 +311,27 @@ using Box = struct<T: type> {
 var: Box<int> b = {42};          // 实例化 Box<int>
 var: Box<Box<int>> nb = {{7}};   // 嵌套实例化
 ```
-泛型**函数**（`func foo<T>`）尚未实现。
+
+### 泛型函数
+`func foo<T: type>(...)` 定义，调用时 `foo<int>(args)` 实例化（支持多参数、与泛型结构体组合、跨包调用）：
+```plang
+func maxOf<T: type>(val: T a, val: T b) : T {
+    if (a > b) { return a; }
+    return b;
+}
+var: int m = maxOf<int>(3, 7);       // 7
+var: f64 mf = maxOf<f64>(1.5, 2.5);  // 2.5
+```
+泛型结构体方法暂不克隆，标准库以自由泛型函数形式提供（如 `vector.push<int>(&v, x)`）。
+
+### sizeof
+`sizeof(T)` 返回类型字节数（编译期常量）：
+```plang
+sizeof(i8)       // 1
+sizeof(int)      // 4
+sizeof(i64)      // 8
+sizeof(Box<int>) // 4
+```
 
 ### RAII：construction / destroy
 变量声明后自动调用 `.construction`，作用域退出时逆序调用 `.destroy`：
@@ -359,7 +387,6 @@ extern var stdin : ptr;
 ```
 
 ## 标准库类型
-- `std.vector.vec`: 可变长数组（**设计中，尚未实现**）.
 - `std.string.str`: 可变ASCII字符串（**设计中，尚未实现**）.
 - `std.string.wstr`: 可变UTF-32字符串（**设计中，尚未实现**）.
 
@@ -373,6 +400,7 @@ extern var stdin : ptr;
 | `std.atomic` | 原子操作 | `atomic.load/store/add/sub/exchange/cas` + 内存序参数 |
 | `std.option` | null 安全 | `Option<T>` 泛型结构体：`{true, v}` 有值 / `{false, 0}` 无值 |
 | `std.result` | 错误处理 | `Result<T, E>` 泛型结构体：`{true, v, 0}` 成功 / `{false, 0, e}` 失败 |
+| `std.vector` | 动态数组 | `Vec<T>` 泛型容器：`vector.new/push/get/len/pop/destroy`，自动扩容 |
 
 # 多线程 (std.thread)
 `std.thread` 是**真正的源码库**，位于 `std/thread/thread.plang`：`import std.thread;` 后编译器将该包独立编译为 `.o` 并与用户程序链接。

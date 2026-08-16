@@ -14,6 +14,7 @@
 | `std.atomic` | `import std.atomic;` | 原子操作：load/store/add/exchange/cas + 内存序 |
 | `std.option` | `import std.option;` | null 安全：`Option<T>` 泛型结构体 |
 | `std.result` | `import std.result;` | 错误处理：`Result<T, E>` 泛型结构体 |
+| `std.vector` | `import std.vector;` | 动态数组：`Vec<T>` 泛型容器，自动扩容 |
 
 ---
 
@@ -343,3 +344,39 @@ func main() : int {
 ```
 
 > `?` 传播运算符尚未实现（D6 后续）；错误处理目前为显式分支检查。
+
+---
+
+# std.vector 动态数组
+
+`Vec<T>` 是泛型结构体（堆内存），可变长数组，自动扩容。需要 `import std.vector;`。
+
+| 函数 | 说明 |
+|------|------|
+| `vector.new<T>(cap)` | 创建空 Vec（预留 `cap` 个元素容量），返回 `Vec<T>` |
+| `vector.push<T>(&v, item)` | 末尾追加（容量不足自动翻倍扩容） |
+| `vector.get<T>(&v, i)` | 取第 `i` 个元素（不做越界检查） |
+| `vector.len<T>(&v)` | 元素个数 |
+| `vector.pop<T>(&v)` | 弹出并返回末尾元素 |
+| `vector.destroy<T>(&v)` | 释放堆内存 |
+
+```plang
+import std.io;
+import std.vector;
+
+func main() : int {
+    var: Vec<int> v = vector.new<int>(2);
+    vector.push<int>(&v, 10);
+    vector.push<int>(&v, 20);
+    vector.push<int>(&v, 30);        // 触发扩容
+    io.printInt(vector.len<int>(&v));  // 3
+    io.println("");
+    io.printInt(vector.get<int>(&v, 0));  // 10
+    io.println("");
+    vector.destroy<int>(&v);
+    return 0;
+}
+```
+
+> 泛型结构体方法暂不克隆，故以自由泛型函数 `vector.xxx<T>(&v, ...)` 形式提供；
+> `sizeof(T)` 用于按元素大小分配内存。
