@@ -26,6 +26,8 @@ void Lexer::initKeywords()
         {"using", TokenType::USING},
         {"struct", TokenType::STRUCT},
         {"abstract", TokenType::ABSTRACT},
+        {"union", TokenType::UNION},
+        {"align", TokenType::ALIGN},
         {"pub", TokenType::PUB},
         {"prt", TokenType::PRT},
         {"pri", TokenType::PRI},

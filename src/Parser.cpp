@@ -293,7 +293,7 @@ std::unique_ptr<ASTNode> Parser::parseUsing()
     expect(TokenType::ASSIGN, "expected =");
     std::unique_ptr<ASTNode> aliased;
 
-    if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT))
+    if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT) || check(TokenType::UNION))
     {
         aliased = parseStructDecl(true);
         // 匿名结构体：把 using 的别名作为结构体名
@@ -450,13 +450,28 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
 std::unique_ptr<ASTNode> Parser::parseStructDecl(bool allowAnonymous)
 {
     bool isAbstract = match(TokenType::ABSTRACT);
+    bool isUnion = false;
     if (check(TokenType::STRUCT))
     {
         advance();
     }
+    else if (check(TokenType::UNION))
+    {
+        advance();
+        isUnion = true;
+    }
     else if (!isAbstract)
     {
         expect(TokenType::STRUCT, "expected struct");
+    }
+
+    // 可选对齐 align(N)
+    int alignBytes = 0;
+    if (match(TokenType::ALIGN))
+    {
+        expect(TokenType::LPAREN, "expected ( after align");
+        alignBytes = std::stoi(expect(TokenType::NUMBER, "expected alignment value").text);
+        expect(TokenType::RPAREN, "expected ) after alignment value");
     }
 
     std::string structName;
@@ -474,6 +489,8 @@ std::unique_ptr<ASTNode> Parser::parseStructDecl(bool allowAnonymous)
         column = name.column;
     }
     auto structNode = std::make_unique<StructDeclNode>(structName, isAbstract, line, column);
+    structNode->isUnion = isUnion;
+    structNode->alignBytes = alignBytes;
 
     // 泛型 <T: type>
     if (match(TokenType::LT))
@@ -672,6 +689,13 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
         name = expect(TokenType::IDENT, "expected variable name").text;
     }
 
+    // 位域宽度: var: int x: 3;
+    int bitWidth = 0;
+    if (match(TokenType::COLON))
+    {
+        bitWidth = std::stoi(expect(TokenType::NUMBER, "expected bit width").text);
+    }
+
     // 引用声明: var ref@target
     if (match(TokenType::AT))
     {
@@ -698,7 +722,7 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
 
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<VariableDeclNode>(isVar, isMoved, name, std::move(type), std::move(init),
-                                              previous().line, previous().column);
+                                              previous().line, previous().column, bitWidth);
 }
 
 std::unique_ptr<ASTNode> Parser::parseIf()

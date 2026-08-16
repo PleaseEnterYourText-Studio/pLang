@@ -58,19 +58,23 @@ private:
     // 调用点参数类型转换（C 式隐式转换）
     llvm::Value* coerceValue(llvm::Value* val, llvm::Type* targetTy);
 
-    // 结构体类型注册表：名字 → LLVM 结构体类型 + 字段名（按声明顺序）
+    // 结构体类型注册表：名字 → LLVM 结构体类型 + 字段信息（按声明顺序）
     struct StructDef
     {
         llvm::StructType* type;
         std::vector<std::string> fieldNames;
+        std::vector<llvm::Type*> fieldTypes;
+        std::vector<int> fieldBits;     // 位域宽度（0=普通字段）
+        bool isUnion = false;           // union：所有字段共享同一内存
+        int alignBytes = 0;             // 对齐（0=默认）
     };
     std::unordered_map<std::string, StructDef> structDefs;
 
-    // 取结构体字段地址（GEP），并输出字段类型
+    // 取结构体字段地址（GEP/bitcast），并输出字段类型与位宽
     llvm::Value* getStructFieldPtr(llvm::Value* structPtr, const std::string& structName,
-                                   const std::string& fieldName, llvm::Type*& fieldType);
-    // 多级成员地址解析 a.b.c：逐级 GEP，输出最终字段类型
-    llvm::Value* getMemberAddress(const std::string& dottedName, llvm::Type*& fieldType);
+                                   const std::string& fieldName, llvm::Type*& fieldType, int& bitWidth);
+    // 多级成员地址解析 a.b.c：逐级解析，输出最终字段类型与位宽
+    llvm::Value* getMemberAddress(const std::string& dottedName, llvm::Type*& fieldType, int& bitWidth);
     // 由 LLVM 结构体类型反查注册表名字
     std::string structNameOf(llvm::Type* structType);
 

@@ -100,6 +100,11 @@ void Sema::visitProgram(ProgramNode* node)
                     if (field->type)
                     {
                         info.fields.emplace_back(field->name, typeNodeToName(field->type.get()));
+                        // 数组成员元素类型（s.arr[i] 用）
+                        if (field->type->baseType == ASTNodeType::TYPE_ARRAY && field->type->inner)
+                        {
+                            info.fieldElementTypes[field->name] = typeNodeToName(field->type->inner.get());
+                        }
                     }
                 }
             }
@@ -129,6 +134,11 @@ void Sema::visitProgram(ProgramNode* node)
                         if (field->type)
                         {
                             info.fields.emplace_back(field->name, typeNodeToName(field->type.get()));
+                            // 数组成员元素类型（s.arr[i] 用）
+                            if (field->type->baseType == ASTNodeType::TYPE_ARRAY && field->type->inner)
+                            {
+                                info.fieldElementTypes[field->name] = typeNodeToName(field->type->inner.get());
+                            }
                         }
                     }
                 }
@@ -896,6 +906,31 @@ std::string Sema::visitIndex(IndexNode* node)
     if (node->operand->type == ASTNodeType::VARIABLE_REF)
     {
         auto* ref = dynamic_cast<VariableRefNode*>(node->operand.get());
+        // 结构体数组成员 s.arr[i]
+        size_t mdot = ref->name.find('.');
+        if (mdot != std::string::npos)
+        {
+            std::string root = ref->name.substr(0, mdot);
+            std::string member = ref->name.substr(mdot + 1);
+            auto rsym = symbols.lookup(root);
+            if (rsym)
+            {
+                auto st = structRegistry.find(rsym->typeName);
+                if (st != structRegistry.end())
+                {
+                    auto eIt = st->second.fieldElementTypes.find(member);
+                    if (eIt != st->second.fieldElementTypes.end())
+                    {
+                        std::string idxType = visitExpr(node->index.get());
+                        if (!idxType.empty() && !isNumericType(idxType))
+                        {
+                            error(node->line, node->column, "array index must be an integer, got '" + idxType + "'");
+                        }
+                        return eIt->second;
+                    }
+                }
+            }
+        }
         auto aIt = arrayElementTypes.find(ref->name);
         auto pIt = pointerElementTypes.find(ref->name);
         if (aIt != arrayElementTypes.end())

@@ -47,6 +47,7 @@ private:
     struct StructInfo
     {
         std::vector<std::pair<std::string, std::string>> fields;
+        std::unordered_map<std::string, std::string> fieldElementTypes; // 数组成员 → 元素类型
     };
     std::unordered_map<std::string, StructInfo> structRegistry;
 

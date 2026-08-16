@@ -342,11 +342,12 @@ struct VariableDeclNode : ASTNode
     std::string name;
     std::unique_ptr<TypeNode> type;
     std::unique_ptr<ASTNode> initializer;
+    int bitWidth;               // 位域宽度（0=普通字段）
 
     VariableDeclNode(bool isVar, bool isMoved, const std::string& name, std::unique_ptr<TypeNode> type,
-                     std::unique_ptr<ASTNode> initializer, int line = 0, int column = 0)
+                     std::unique_ptr<ASTNode> initializer, int line = 0, int column = 0, int bitWidth = 0)
         : ASTNode(ASTNodeType::VARIABLE_DECL, line, column), isVar(isVar), isMoved(isMoved), name(name),
-          type(std::move(type)), initializer(std::move(initializer)) {}
+          type(std::move(type)), initializer(std::move(initializer)), bitWidth(bitWidth) {}
 };
 
 // 赋值语句
@@ -472,11 +473,14 @@ struct StructDeclNode : ASTNode
 {
     std::string name;
     bool isAbstract;
+    bool isUnion;               // union：所有成员共享同一内存
+    int alignBytes;             // 对齐（0=默认）
     std::vector<std::string> bases;
     std::vector<std::unique_ptr<ASTNode>> members;
 
     StructDeclNode(const std::string& name, bool isAbstract, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::STRUCT_DECL, line, column), name(name), isAbstract(isAbstract) {}
+        : ASTNode(ASTNodeType::STRUCT_DECL, line, column), name(name), isAbstract(isAbstract),
+          isUnion(false), alignBytes(0) {}
 };
 
 // impl 实现
