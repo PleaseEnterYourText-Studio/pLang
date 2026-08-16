@@ -1,11 +1,3 @@
-# PLang 语言文档
-
-> **实现状态**：本文为语言设计文档。已实现：指针/数组、结构体/联合/位域/对齐、泛型结构体、RAII（construction/destroy）、
-> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result）。
-> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、`std.vector`/`std.string` 库、模板函数自动生成、`?` 错误传播。
-> 编译器：LLVM 优化（-O0~-O3）、DWARF 调试信息、错误恢复、独立编译单元、LSP（悬停/补全/跳转/重命名）。
-> 标准库通过 `import std.xxx` 独立编译为 `.o` 并与用户程序链接，见 `stdlib.md`。
-
 # 包
 ## 包的声明
 一个目录为一个包, 目录内所有 `.plang` 源文件同属一个包.
@@ -300,7 +292,7 @@ using Circle = struct : pub Shape {
 
 ## 已实现的附加语言特性
 
-以下特性已实现并有测试覆盖，补充说明（详情见 `stdlib.md` 与 `ROADMAP.md`）：
+以下特性已实现并有测试覆盖，补充说明（详情见 `stdlib.md`）：
 
 ### 泛型结构体实例化
 `struct<T: type>` 定义模板，`Name<Arg1, Arg2>` 使用（支持多参数、嵌套、泛型方法）：
