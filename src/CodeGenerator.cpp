@@ -1,4 +1,5 @@
 #include "../include/CodeGenerator.h"
+#include "../include/TypeSystem.h"
 #include <iostream>
 #include <algorithm>
 #include "llvm/TargetParser/Host.h"
@@ -81,17 +82,18 @@ llvm::Type* CodeGenerator::getLLVMType(TypeNode* type)
 
 llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
 {
-    if (typeName == "i8" || typeName == "u8" || typeName == "char") {
-        return llvm::Type::getInt8Ty(context);
-    } else if (typeName == "i16" || typeName == "u16") {
-        return llvm::Type::getInt16Ty(context);
-    } else if (typeName == "i32" || typeName == "u32" || typeName == "int" || typeName == "uint") {
-        return llvm::Type::getInt32Ty(context);
-    } else if (typeName == "bool") {
-        return llvm::Type::getInt1Ty(context);
-    } else if (typeName == "i64" || typeName == "u64") {
-        return llvm::Type::getInt64Ty(context);
-    } else if (typeName == "f32") {
+    // D1：类型位宽统一由 TypeSystem 提供，消除裸字符串链
+    int bits = TypeSystem::bitWidth(typeName);
+    switch (bits)
+    {
+        case 1: return llvm::Type::getInt1Ty(context);
+        case 8: return llvm::Type::getInt8Ty(context);
+        case 16: return llvm::Type::getInt16Ty(context);
+        case 32: return llvm::Type::getInt32Ty(context);
+        case 64: return llvm::Type::getInt64Ty(context);
+        default: break;
+    }
+    if (typeName == "f32") {
         return llvm::Type::getFloatTy(context);
     } else if (typeName == "f64") {
         return llvm::Type::getDoubleTy(context);

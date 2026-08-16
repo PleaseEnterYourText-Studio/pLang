@@ -147,3 +147,15 @@ bool TypeSystem::widening(const std::shared_ptr<TypeInfo>& from, const std::shar
     }
     return rf < intRank.size() && rt < intRank.size() && rf < rt;
 }
+
+int TypeSystem::bitWidth(const std::string& name)
+{
+    if (name == "i8" || name == "u8" || name == "char") return 8;
+    if (name == "i16" || name == "u16") return 16;
+    if (name == "i32" || name == "u32" || name == "int" || name == "uint") return 32;
+    if (name == "i64" || name == "u64") return 64;
+    if (name == "f32") return 32;
+    if (name == "f64") return 64;
+    if (name == "bool") return 1;
+    return 0;
+}

@@ -44,6 +44,8 @@ public:
     static bool compatible(const std::shared_ptr<TypeInfo>& from, const std::shared_ptr<TypeInfo>& to);
     // 整数拓宽（小类型可安全赋给大类型）
     static bool widening(const std::shared_ptr<TypeInfo>& from, const std::shared_ptr<TypeInfo>& to);
+    // 类型位宽（数值类型；非数值返回 0）：CodeGenerator 统一映射用
+    static int bitWidth(const std::string& name);
 };
 
 #endif
