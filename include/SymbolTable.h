@@ -33,11 +33,14 @@ struct Symbol
     int column;
     std::string returnType;         // 函数返回类型
     std::vector<std::string> paramTypes;  // 函数参数类型
+    std::string packageName;        // 所属包（如 "std.thread"）
+    bool isPub;                     // 跨包可见
+    bool isExtern;                  // extern FFI 声明
 
     Symbol(const std::string& name, SymbolKind kind, SymbolMutability mutability,
            const std::string& typeName, int line = 0, int column = 0)
         : name(name), kind(kind), mutability(mutability), typeName(typeName),
-          line(line), column(column) {}
+          line(line), column(column), isPub(false), isExtern(false) {}
 };
 
 // 单个作用域

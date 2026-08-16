@@ -22,6 +22,8 @@ enum class TokenType
     THIS, THIS_TYPE, TYPE,
     AS,
     IF, ELSE, WHILE, FOR, DO, ASM,
+    EXTERN,      // extern func 声明（FFI）
+    NULL_LIT,    // null 空指针字面量
 
     //内置类型名
     INT, CHAR, STRING_TYPE, WCHAR, WSTRING, BOOL,
@@ -76,6 +78,7 @@ public:
             {TokenType::THIS, "THIS"}, {TokenType::THIS_TYPE, "THIS_TYPE"}, {TokenType::TYPE, "TYPE"},
             {TokenType::AS, "AS"},
             {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"}, {TokenType::ASM, "ASM"},
+            {TokenType::EXTERN, "EXTERN"}, {TokenType::NULL_LIT, "NULL_LIT"},
             {TokenType::INT, "INT"}, {TokenType::CHAR, "CHAR"}, {TokenType::STRING_TYPE, "STRING_TYPE"}, {TokenType::WCHAR, "WCHAR"}, {TokenType::WSTRING, "WSTRING"}, {TokenType::BOOL, "BOOL"},
             {TokenType::TRUE, "TRUE"}, {TokenType::FALSE, "FALSE"},
             {TokenType::I32, "I32"}, {TokenType::I16, "I16"}, {TokenType::I64, "I64"}, {TokenType::I8, "I8"},

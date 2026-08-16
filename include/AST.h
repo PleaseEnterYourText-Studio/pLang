@@ -35,6 +35,7 @@ enum class ASTNodeType
     LITERAL_FLOAT,
     LITERAL_STRING,
     LITERAL_BOOL,
+    LITERAL_NULL,
     VARIABLE_REF,
     BINARY_OP,
     UNARY_OP,
@@ -167,6 +168,13 @@ struct LiteralBoolNode : ASTNode
 
     LiteralBoolNode(bool value, int line = 0, int column = 0)
     : ASTNode(ASTNodeType::LITERAL_BOOL, line, column), value(value) {};
+};
+
+//空指针字面量节点
+struct NullNode : ASTNode
+{
+    NullNode(int line = 0, int column = 0)
+    : ASTNode(ASTNodeType::LITERAL_NULL, line, column) {};
 };
 
 //引用节点
@@ -423,9 +431,13 @@ struct FunctionDeclNode : ASTNode
     std::unique_ptr<TypeNode> returnType;
     std::unique_ptr<BlockStmtNode> body;
     bool hasBody;
+    bool isExtern;          // extern func：FFI 声明，不生成定义
+    bool isPub;             // pub：跨包可见
+    std::string packageName; // 所属包（如 "std.thread"），由解析器在合并/解析时标注
 
     FunctionDeclNode(const std::string& name, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::FUNCTION_DECL, line, column), name(name), hasBody(false) {}
+        : ASTNode(ASTNodeType::FUNCTION_DECL, line, column), name(name), hasBody(false),
+          isExtern(false), isPub(false) {}
 };
 
 // struct 声明

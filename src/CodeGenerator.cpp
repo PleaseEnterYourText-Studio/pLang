@@ -65,6 +65,11 @@ llvm::Type* CodeGenerator::getLLVMType(TypeNode* type)
         return llvm::ArrayType::get(innerType, size);
     }
 
+    if (type->baseType == ASTNodeType::TYPE_PRIMITIVE) {
+        // 用户命名类型/ptr：按名字映射
+        return getLLVMType(type->name);
+    }
+
     return getLLVMType(type->baseType);
 }
 
@@ -84,7 +89,7 @@ llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
         return llvm::Type::getFloatTy(context);
     } else if (typeName == "f64") {
         return llvm::Type::getDoubleTy(context);
-    } else if (typeName == "string" || typeName == "pointer") {
+    } else if (typeName == "string" || typeName == "pointer" || typeName == "ptr") {
         return llvm::PointerType::get(context, 0);
     } else if (typeName == "void") {
         return llvm::Type::getVoidTy(context);
@@ -125,6 +130,10 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
         case ASTNodeType::LITERAL_BOOL: {
             auto* lit = static_cast<LiteralBoolNode*>(node);
             return llvm::ConstantInt::get(context, llvm::APInt(1, lit->value ? 1 : 0));
+        }
+
+        case ASTNodeType::LITERAL_NULL: {
+            return llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0));
         }
 
         case ASTNodeType::LITERAL_STRING: {
@@ -633,7 +642,26 @@ void CodeGenerator::generate(ProgramNode* root)
             auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
             if (fn->name != "main")
             {
-                generateFunction(fn);
+                if (fn->body)
+                {
+                    generateFunction(fn);
+                }
+                else
+                {
+                    // 无函数体（extern FFI 或待 impl 的声明）：仅 emit 外部声明
+                    llvm::Type* retType = llvm::Type::getInt32Ty(context);
+                    if (fn->returnType) {
+                        retType = getLLVMType(fn->returnType.get());
+                    }
+                    std::vector<llvm::Type*> paramTypes;
+                    for (auto& param : fn->params) {
+                        paramTypes.push_back(getLLVMType(param->type.get()));
+                    }
+                    llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, false);
+                    if (!module->getFunction(fn->name)) {
+                        llvm::Function::Create(ft, llvm::Function::ExternalLinkage, fn->name, module.get());
+                    }
+                }
             }
         }
     }

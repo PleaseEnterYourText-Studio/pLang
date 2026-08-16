@@ -34,6 +34,8 @@ void Lexer::initKeywords()
         {"type", TokenType::TYPE},
         {"as", TokenType::AS},
         {"asm", TokenType::ASM},
+        {"extern", TokenType::EXTERN},
+        {"null", TokenType::NULL_LIT},
         {"if", TokenType::IF},
         {"else", TokenType::ELSE},
         {"while", TokenType::WHILE},

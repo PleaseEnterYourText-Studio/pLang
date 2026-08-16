@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include <memory>
 #include "AST.h"
 #include "SymbolTable.h"
@@ -37,6 +38,8 @@ private:
     std::vector<SemaWarning> warnings;
     std::string currentReturnType;      // 当前函数返回类型（空=无返回）
     std::string currentFunctionName;    // 当前函数名
+    std::string currentPackage;         // 当前分析的函数所属包（可见性检查用）
+    std::set<std::string> importedModules;  // 已导入的标准库模块（如 "std.thread"）
 
 public:
     bool analyze(std::unique_ptr<ProgramNode>& program);

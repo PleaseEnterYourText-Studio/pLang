@@ -31,6 +31,17 @@ void Sema::visitProgram(ProgramNode* node)
         error(node->line, node->column, "missing package declaration");
     }
 
+    // 收集导入的模块（如 import std.thread;）
+    importedModules.clear();
+    for (auto& imp : node->imports)
+    {
+        if (imp->type == ASTNodeType::IMPORT_STMT)
+        {
+            auto* importNode = dynamic_cast<ImportStmtNode*>(imp.get());
+            importedModules.insert(importNode->path);
+        }
+    }
+
     // 第一阶段：收集所有顶层声明（函数/结构体），允许前向引用
     for (auto& decl : node->decls)
     {
@@ -45,9 +56,24 @@ void Sema::visitProgram(ProgramNode* node)
             {
                 sym->paramTypes.push_back(p->type ? typeNodeToName(p->type.get()) : "");
             }
+            sym->packageName = funcNode->packageName;
+            sym->isPub = funcNode->isPub;
+            sym->isExtern = funcNode->isExtern;
             if (!symbols.declare(funcNode->name, sym))
             {
                 error(funcNode->line, funcNode->column, "duplicate function '" + funcNode->name + "'");
+            }
+            // 包限定别名注册：<别名>.<函数名>（别名为包路径最后一段，如 thread.join）
+            if (!funcNode->packageName.empty())
+            {
+                size_t lastDot = funcNode->packageName.rfind('.');
+                std::string alias = (lastDot == std::string::npos)
+                    ? funcNode->packageName
+                    : funcNode->packageName.substr(lastDot + 1);
+                if (!alias.empty() && alias != funcNode->name)
+                {
+                    symbols.declare(alias + "." + funcNode->name, sym);
+                }
             }
         }
         else if (decl->type == ASTNodeType::STRUCT_DECL)
@@ -122,6 +148,7 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     symbols.pushScope();
     currentReturnType = node->returnType ? typeNodeToName(node->returnType.get()) : "";
     currentFunctionName = node->name;
+    currentPackage = node->packageName;
 
     // 参数
     for (auto& param : node->params)
@@ -151,6 +178,7 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     symbols.popScope();
     currentReturnType.clear();
     currentFunctionName.clear();
+    currentPackage.clear();
 }
 
 // 结构体
@@ -416,6 +444,7 @@ std::string Sema::visitExpr(ASTNode* node)
         case ASTNodeType::LITERAL_FLOAT: return visitLiteralFloat(dynamic_cast<LiteralFloatNode*>(node));
         case ASTNodeType::LITERAL_STRING: return visitLiteralString(dynamic_cast<LiteralStringNode*>(node));
         case ASTNodeType::LITERAL_BOOL: return visitLiteralBool(dynamic_cast<LiteralBoolNode*>(node));
+        case ASTNodeType::LITERAL_NULL: return "pointer";
         case ASTNodeType::VARIABLE_REF: return visitVariableRef(dynamic_cast<VariableRefNode*>(node));
         case ASTNodeType::ASSIGNMENT_STMT: return visitAssignment(dynamic_cast<AssignmentNode*>(node));
         case ASTNodeType::CAST:
@@ -481,10 +510,67 @@ std::string Sema::visitLogical(LogicalOpNode* node)
 std::string Sema::visitCall(FunctionCallNode* node)
 {
     // 成员方法调用 circle.area() —— 拆分根对象与方法名
+    // 成员方法调用 circle.area() / 包限定调用 thread.join() —— 拆分根对象与方法名
     size_t dot = node->name.find('.');
     if (dot != std::string::npos)
     {
         std::string objName = node->name.substr(0, dot);
+
+        // 包限定调用：objName 是某个已导入包的别名（如 import std.thread 后的 thread）
+        bool isPackageAlias = false;
+        for (const auto& imp : importedModules)
+        {
+            std::string alias = imp.substr(imp.rfind('.') + 1);
+            if (alias == objName) { isPackageAlias = true; break; }
+        }
+        if (isPackageAlias)
+        {
+            auto pkgSym = symbols.lookup(node->name); // "<别名>.<函数名>" 已在注册阶段登记
+            if (!pkgSym)
+            {
+                error(node->line, node->column,
+                      "unknown function '" + node->name + "' in module '" + objName + "'");
+                return "";
+            }
+            if (pkgSym->kind != SymbolKind::FUNCTION)
+            {
+                error(node->line, node->column, "'" + node->name + "' is not a function");
+                return "";
+            }
+            // 跨包可见性：必须 pub（同包调用豁免）
+            if (!pkgSym->isPub && pkgSym->packageName != currentPackage)
+            {
+                error(node->line, node->column, "function '" + node->name + "' is not public");
+                return "";
+            }
+            // 参数数量检查
+            if (!pkgSym->paramTypes.empty() || !node->arguments.empty())
+            {
+                if (pkgSym->paramTypes.size() != node->arguments.size())
+                {
+                    error(node->line, node->column, "function '" + node->name + "' expects " +
+                          std::to_string(pkgSym->paramTypes.size()) + " argument(s), got " +
+                          std::to_string(node->arguments.size()));
+                }
+            }
+            // 参数类型检查
+            for (size_t i = 0; i < node->arguments.size() && i < pkgSym->paramTypes.size(); ++i)
+            {
+                std::string argType = visitExpr(node->arguments[i].get());
+                if (!argType.empty() && !pkgSym->paramTypes[i].empty())
+                {
+                    if (!isCompatible(argType, pkgSym->paramTypes[i]))
+                    {
+                        error(node->line, node->column, "argument " + std::to_string(i + 1) + " of '" +
+                              node->name + "' expects '" + pkgSym->paramTypes[i] + "', got '" + argType + "'");
+                    }
+                }
+            }
+            // 重命名为函数本名（合并单模块代码生成直接按本名查 LLVM 函数）
+            node->name = pkgSym->name;
+            return pkgSym->returnType;
+        }
+
         std::string methodName = node->name.substr(dot + 1);
 
         auto objSym = symbols.lookup(objName);
@@ -511,6 +597,12 @@ std::string Sema::visitCall(FunctionCallNode* node)
     if (sym->kind != SymbolKind::FUNCTION)
     {
         error(node->line, node->column, "'" + node->name + "' is not a function");
+        return "";
+    }
+    // 跨包可见性：非 pub 的跨包函数不可直接调用
+    if (!sym->isPub && !sym->packageName.empty() && sym->packageName != currentPackage)
+    {
+        error(node->line, node->column, "function '" + node->name + "' is not public");
         return "";
     }
 
@@ -637,7 +729,7 @@ bool Sema::isBuiltinType(const std::string& type) const
 {
     return isNumericType(type) || type == "char" || type == "string" ||
            type == "bool" || type == "pointer" || type == "array" ||
-           type == "wchar" || type == "wstring";
+           type == "wchar" || type == "wstring" || type == "ptr";
 }
 
 bool Sema::isCompatible(const std::string& from, const std::string& to) const

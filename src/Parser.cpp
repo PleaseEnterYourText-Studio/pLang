@@ -30,6 +30,14 @@ std::unique_ptr<ProgramNode> Parser::parse()
         else
         {
             auto decl = parseDeclaration();
+            // 标注函数所属包（供跨包可见性检查与包限定调用解析使用）
+            if (decl)
+            {
+                if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get()))
+                {
+                    fn->packageName = program->packageName;
+                }
+            }
             if (decl) program->decls.push_back(std::move(decl));
         }
     }
@@ -195,6 +203,28 @@ std::unique_ptr<TypeNode> Parser::parsePrimitiveType()
 
 std::unique_ptr<ASTNode> Parser::parseDeclaration()
 {
+    // 顶层可见性修饰：pub func / pub struct（仅函数在 v1 生效）
+    if (match(TokenType::PUB))
+    {
+        auto decl = parseDeclaration();
+        if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get()))
+        {
+            fn->isPub = true;
+        }
+        return decl;
+    }
+
+    // extern FFI 声明：extern func ...
+    if (match(TokenType::EXTERN))
+    {
+        auto fn = parseFunctionDecl();
+        if (auto* fnNode = dynamic_cast<FunctionDeclNode*>(fn.get()))
+        {
+            fnNode->isExtern = true;
+        }
+        return fn;
+    }
+
     if (match(TokenType::USING)) return parseUsing();
     if (check(TokenType::FUNC)) return parseFunctionDecl();
     if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT)) return parseStructDecl();
@@ -208,8 +238,13 @@ std::unique_ptr<ASTNode> Parser::parseDeclaration()
 std::unique_ptr<ASTNode> Parser::parsePackage()
 {
     Token name = expect(TokenType::IDENT, "expected package name");
+    std::string pkgName = name.text;
+    while (match(TokenType::DOT))
+    {
+        pkgName += "." + expect(TokenType::IDENT, "expected package path segment").text;
+    }
     expect(TokenType::SEMICOLON, "expected ;");
-    return std::make_unique<PackageStmtNode>(name.text, name.line, name.column);
+    return std::make_unique<PackageStmtNode>(pkgName, name.line, name.column);
 }
 
 std::unique_ptr<ASTNode> Parser::parseImport()
@@ -316,10 +351,29 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
                 throw std::runtime_error("expected parameter modifier val/var");
             }
 
-            expect(TokenType::COLON, "expected : after parameter modifier");
-            auto type = parseTypeSuffix();
+            std::unique_ptr<TypeNode> paramType;
+            if (check(TokenType::ARROW))
+            {
+                // 指针参数：var -> var[: T] name
+                advance();
+                if (match(TokenType::VAR)) { /* rw */ }
+                else if (match(TokenType::VAL)) { /* const */ }
+                std::unique_ptr<TypeNode> inner;
+                if (match(TokenType::COLON))
+                {
+                    inner = parseTypeSuffix();
+                }
+                paramType = std::make_unique<TypeNode>(ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                                                       0, std::move(inner), false);
+            }
+            else
+            {
+                expect(TokenType::COLON, "expected : after parameter modifier");
+                paramType = parseTypeSuffix();
+            }
+
             Token pname = expect(TokenType::IDENT, "expected parameter name");
-            fnDecl->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(type),
+            fnDecl->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(paramType),
                                                                  pname.line, pname.column));
         } while (match(TokenType::COMMA));    }
     expect(TokenType::RPAREN, "expected )");
@@ -1099,6 +1153,10 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
     if (match(TokenType::FALSE))
     {
         return std::make_unique<LiteralBoolNode>(false, previous().line, previous().column);
+    }
+    if (match(TokenType::NULL_LIT))
+    {
+        return std::make_unique<NullNode>(previous().line, previous().column);
     }
     if (match(TokenType::IDENT))
     {
