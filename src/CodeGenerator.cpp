@@ -211,8 +211,16 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             auto* operand = generateExpression(unary->operand.get());
 
             switch (unary->op) {
-                case UnaryOpType::NEG:
+                case UnaryOpType::NEG: {
+                    // 常量取负：直接折叠成负常量，避免常量表达式 sub (0.0, x) 无法选择
+                    if (auto* cf = llvm::dyn_cast<llvm::ConstantFP>(operand)) {
+                        return llvm::ConstantFP::get(context, -cf->getValueAPF());
+                    }
+                    if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(operand)) {
+                        return llvm::ConstantInt::get(context, -ci->getValue());
+                    }
                     return builder.CreateNeg(operand, "neg");
+                }
                 case UnaryOpType::NOT:
                     return builder.CreateNot(operand, "not");
                 case UnaryOpType::INC:
