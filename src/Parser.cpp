@@ -1303,6 +1303,42 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
             std::string full = expr->type == ASTNodeType::VARIABLE_REF
                 ? dynamic_cast<VariableRefNode*>(expr.get())->name + "." + member.text
                 : member.text;
+            // 泛型成员调用 s.foo<T>(...)：member 后紧跟 < 时解析泛型实参拼接
+            if (check(TokenType::LT))
+            {
+                size_t savePos = pos;
+                bool savedGT = genericPendingGT;
+                try
+                {
+                    advance(); // <
+                    std::string gname = full + "<";
+                    do
+                    {
+                        auto argTy = parseTypeSuffix();
+                        gname += typeNodeText(argTy.get());
+                        if (check(TokenType::COMMA)) gname += ",";
+                    } while (match(TokenType::COMMA));
+                    if (genericPendingGT) genericPendingGT = false;
+                    else if (match(TokenType::GT)) { /* 已消费 */ }
+                    else if (match(TokenType::SHR)) genericPendingGT = true;
+                    else throw std::runtime_error("generic call");
+                    gname += ">";
+                    if (check(TokenType::LPAREN))
+                    {
+                        full = gname;
+                    }
+                    else
+                    {
+                        pos = savePos;
+                        genericPendingGT = savedGT;
+                    }
+                }
+                catch (...)
+                {
+                    pos = savePos;
+                    genericPendingGT = savedGT;
+                }
+            }
             expr = std::make_unique<VariableRefNode>(full, member.line, member.column);
         }
         else if (match(TokenType::LBRACKET))

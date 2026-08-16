@@ -421,6 +421,21 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                 return generateThreadBuiltin(call);
             }
 
+            // 包限定调用 vector.push<T>(...)：函数名与调用名一致（泛型实例化按调用名注册）
+            llvm::Function* func = module->getFunction(call->name);
+            if (func)
+            {
+                std::vector<llvm::Value*> args;
+                for (size_t i = 0; i < call->arguments.size(); ++i)
+                {
+                    llvm::Value* v = generateExpression(call->arguments[i].get());
+                    if (v && i < func->getFunctionType()->getNumParams())
+                        v = coerceValue(v, func->getFunctionType()->getParamType(i));
+                    args.push_back(v);
+                }
+                return builder.CreateCall(func, args, "call");
+            }
+
             // 成员方法调用 obj.method(args)：静态分派到 <Struct>.<method>
             if (call->name.find('.') != std::string::npos) {
                 std::string objName = call->name.substr(0, call->name.find('.'));
@@ -453,7 +468,7 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                 return llvm::ConstantFP::get(context, llvm::APFloat(0.0));
             }
 
-            llvm::Function* func = module->getFunction(call->name);
+            func = module->getFunction(call->name);
             if (!func) {
                 // 间接调用：通过函数指针变量 cb(...)
                 auto it = namedValues.find(call->name);
@@ -1148,6 +1163,11 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
                 llvm::Type* ft = field->type ? getLLVMType(field->type.get()) : llvm::Type::getInt32Ty(context);
                 def.fieldTypes.push_back(ft);
                 fieldTypes.push_back(ft);
+                // 指针字段 → 指向类型（s.ptr[i] 用）
+                if (field->type && field->type->baseType == ASTNodeType::TYPE_POINTER && field->type->inner)
+                {
+                    fieldPointeeTypes[sn->name + "." + field->name] = getLLVMType(field->type->inner.get());
+                }
             }
         }
         if (def.isUnion)
@@ -1598,20 +1618,32 @@ llvm::Value* CodeGenerator::getIndexedAddress(IndexNode* node, llvm::Type*& elem
         return nullptr;
     }
     auto* ref = static_cast<VariableRefNode*>(node->operand.get());
-    // 结构体数组成员 s.arr[i]
+    // 结构体成员 s.arr[i] / s.ptr[i]
     size_t mdot = ref->name.find('.');
     if (mdot != std::string::npos)
     {
         llvm::Type* fty = nullptr;
         int fbw = 0;
         llvm::Value* fp = getMemberAddress(ref->name, fty, fbw);
-        if (fp && fty && fty->isArrayTy())
+        if (fp && fty)
         {
             llvm::Value* idx = generateExpression(node->index.get());
             if (!idx) return nullptr;
             idx = builder.CreateIntCast(idx, llvm::Type::getInt64Ty(context), true, "idx");
-            elemType = fty->getArrayElementType();
-            return builder.CreateGEP(fty, fp, {builder.getInt64(0), idx}, "elemPtr");
+            if (fty->isArrayTy())
+            {
+                elemType = fty->getArrayElementType();
+                return builder.CreateGEP(fty, fp, {builder.getInt64(0), idx}, "elemPtr");
+            }
+            if (fty->isPointerTy())
+            {
+                // 指针字段 s.ptr[i]：取指针值后按指向类型 GEP
+                llvm::Type* pointee = getPointeeType(ref->name);
+                if (!pointee) return nullptr;
+                elemType = pointee;
+                llvm::Value* base = builder.CreateLoad(fty, fp, ref->name);
+                return builder.CreateGEP(pointee, base, {idx}, "elemPtr");
+            }
         }
         return nullptr;
     }
@@ -1639,6 +1671,21 @@ llvm::Value* CodeGenerator::getIndexedAddress(IndexNode* node, llvm::Type*& elem
     return nullptr;
 }
 
+
+// 取 "s.ptr" 指针字段的指向类型（s.ptr[i] 用）：根变量 → 结构体名 → 查字段映射
+llvm::Type* CodeGenerator::getPointeeType(const std::string& dottedName)
+{
+    size_t first = dottedName.find('.');
+    if (first == std::string::npos) return nullptr;
+    std::string root = dottedName.substr(0, first);
+    auto eIt = namedValueElementTypes.find(root);
+    if (eIt == namedValueElementTypes.end()) return nullptr;
+    std::string sname = structNameOf(eIt->second);
+    if (sname.empty()) return nullptr;
+    auto pIt = fieldPointeeTypes.find(sname + "." + dottedName.substr(first + 1));
+    if (pIt == fieldPointeeTypes.end()) return nullptr;
+    return pIt->second;
+}
 
 // std.thread 编译器内置支持
 

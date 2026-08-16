@@ -48,6 +48,7 @@ private:
     {
         std::vector<std::pair<std::string, std::string>> fields;
         std::unordered_map<std::string, std::string> fieldElementTypes; // 数组成员 → 元素类型
+        std::unordered_map<std::string, std::string> fieldPointerTypes; // 指针成员 → 指向类型
         // 方法：方法名 → {返回类型, 参数类型}
         std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>> methods;
         bool hasConstruction = false;   // .construction()
@@ -59,7 +60,7 @@ private:
     std::set<std::string> genericFuncInstances;                          // 已实例化泛型函数（mangled 名）
     ProgramNode* currentProgram = nullptr;                              // 实例化注入用
     void instantiateGeneric(const std::string& mangledName);            // 泛型实例化（克隆+替换+注入）
-    void instantiateGenericFunc(const std::string& mangledName);        // 泛型函数实例化
+    void instantiateGenericFunc(const std::string& tmplName, const std::string& callName);  // 泛型函数实例化
     bool tryResolveGenericType(const std::string& name);                // 名字含 < 时尝试实例化
     std::unique_ptr<TypeNode> substituteType(TypeNode* t,
         const std::vector<std::string>& params, const std::vector<std::string>& args);

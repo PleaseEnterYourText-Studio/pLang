@@ -1,0 +1,75 @@
+package std.vector;
+import std.mem;
+
+// PLang 标准库：可变长数组容器（堆内存）。
+// 用法：
+//   var: Vec<int> v = vec.new<int>(4);
+//   vec.push<int>(&v, 10);
+//   vec.push<int>(&v, 20);
+//   io.printInt(vec.get<int>(&v, 0));   // 10
+//   io.printInt(vec.len<int>(&v));      // 2
+//   vec.destroy<int>(&v);
+// 泛型结构体方法暂不克隆，故以自由泛型函数 vec.xxx<T>(&v, ...) 形式提供。
+
+using Vec = struct<T: type> {
+    pub var -> var: T data;   // 元素数组（堆）
+    pub val: int len;         // 元素个数
+    pub val: int cap;         // 容量（元素个数）
+};
+
+// 创建空 Vec（cap 个元素容量）
+pub func new<T: type>(val: int cap) -> Vec<T> {
+    var -> var: T data = null;
+    if (cap > 0) {
+        data = mem.malloc(cap * sizeof(T));
+    }
+    var: Vec<T> v = {data, 0, cap};
+    return v;
+}
+
+// 追加元素（容量不足时翻倍扩容）
+pub func push<T: type>(var -> var: Vec<T> v, val: T item) {
+    if (v.len == v.cap) {
+        var: int newCap = 4;
+        if (v.cap > 0) {
+            newCap = v.cap * 2;
+        }
+        var -> var: T newData = mem.malloc(newCap * sizeof(T));
+        var: int i = 0;
+        while (i < v.len) {
+            newData[i] = v.data[i];
+            i = i + 1;
+        }
+        mem.free(v.data);
+        v.data = newData;
+        v.cap = newCap;
+    }
+    v.data[v.len] = item;
+    v.len = v.len + 1;
+}
+
+// 取第 i 个元素（不做越界检查）
+pub func get<T: type>(var -> var: Vec<T> v, val: int i) -> T {
+    return v.data[i];
+}
+
+// 元素个数
+pub func len<T: type>(var -> var: Vec<T> v) -> int {
+    return v.len;
+}
+
+// 弹出末尾元素
+pub func pop<T: type>(var -> var: Vec<T> v) -> T {
+    v.len = v.len - 1;
+    return v.data[v.len];
+}
+
+// 释放堆内存
+pub func destroy<T: type>(var -> var: Vec<T> v) {
+    if (v.data != null) {
+        mem.free(v.data);
+        v.data = null;
+    }
+    v.len = 0;
+    v.cap = 0;
+}

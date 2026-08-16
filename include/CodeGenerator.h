@@ -36,6 +36,7 @@ private:
     };
     std::unordered_map<std::string, VarInfo> namedValues;
     std::unordered_map<std::string, llvm::Type*> namedValueElementTypes;  // 指针变量/参数 → 指向类型
+    std::unordered_map<std::string, llvm::Type*> fieldPointeeTypes;       // "结构体.指针字段" → 指向类型
     std::unordered_map<std::string, llvm::GlobalVariable*> externGlobals;  // extern 全局数据
     std::set<std::string> volatileVars;   // volatile 变量（访问走 volatile load/store）
 
@@ -81,6 +82,7 @@ private:
                                    const std::string& fieldName, llvm::Type*& fieldType, int& bitWidth);
     // 多级成员地址解析 a.b.c：逐级解析，输出最终字段类型与位宽
     llvm::Value* getMemberAddress(const std::string& dottedName, llvm::Type*& fieldType, int& bitWidth);
+    llvm::Type* getPointeeType(const std::string& dottedName);   // 指针字段 s.ptr 的指向类型
     // 由 LLVM 结构体类型反查注册表名字
     std::string structNameOf(llvm::Type* structType);
 

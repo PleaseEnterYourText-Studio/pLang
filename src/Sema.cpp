@@ -114,6 +114,10 @@ void Sema::visitProgram(ProgramNode* node)
                         {
                             info.fieldElementTypes[field->name] = typeNodeToName(field->type->inner.get());
                         }
+                        if (field->type->baseType == ASTNodeType::TYPE_POINTER && field->type->inner)
+                        {
+                            info.fieldPointerTypes[field->name] = typeNodeToName(field->type->inner.get());
+                        }
                     }
                 }
             }
@@ -154,6 +158,10 @@ void Sema::visitProgram(ProgramNode* node)
                             if (field->type->baseType == ASTNodeType::TYPE_ARRAY && field->type->inner)
                             {
                                 info.fieldElementTypes[field->name] = typeNodeToName(field->type->inner.get());
+                            }
+                            if (field->type->baseType == ASTNodeType::TYPE_POINTER && field->type->inner)
+                            {
+                                info.fieldPointerTypes[field->name] = typeNodeToName(field->type->inner.get());
                             }
                         }
                     }
@@ -198,11 +206,11 @@ void Sema::visitProgram(ProgramNode* node)
         }
     }
 
-    // 第二阶段：检查函数体
+    // 第二阶段：检查函数体（index 循环：泛型实例化会向 decls 追加声明）
     symbols.pushScope();
-    for (auto& decl : node->decls)
+    for (size_t i = 0; i < node->decls.size(); ++i)
     {
-        visitDecl(decl.get());
+        visitDecl(node->decls[i].get());
     }
     symbols.popScope();
 }
@@ -488,7 +496,8 @@ std::unique_ptr<TypeNode> Sema::substituteType(TypeNode* t,
 std::unique_ptr<BlockStmtNode> Sema::cloneBlock(BlockStmtNode* b,
     const std::vector<std::string>& params, const std::vector<std::string>& args)
 {
-    auto clone = std::make_unique<BlockStmtNode>(b->line, b->column);
+    auto clone = std::make_unique<BlockStmtNode>(b ? b->line : 0, b ? b->column : 0);
+    if (!b) return clone;   // extern 声明无函数体
     for (auto& s : b->statements)
     {
         clone->statements.push_back(cloneStmt(s.get(), params, args));
@@ -508,7 +517,14 @@ std::unique_ptr<ASTNode> Sema::cloneStmt(ASTNode* n,
         {
             auto* v = dynamic_cast<VariableDeclNode*>(n);
             auto t = v->type ? substituteType(v->type.get(), params, args) : nullptr;
-            auto init = v->initializer ? cloneExpr(v->initializer.get(), params, args) : nullptr;
+            std::unique_ptr<ASTNode> init;
+            if (v->initializer)
+            {
+                // 初始化列表 {1,2,3} 是 BLOCK_STMT，走 cloneBlock；其余走 cloneExpr
+                init = (v->initializer->type == ASTNodeType::BLOCK_STMT)
+                    ? cloneBlock(static_cast<BlockStmtNode*>(v->initializer.get()), params, args)
+                    : cloneExpr(v->initializer.get(), params, args);
+            }
             return std::make_unique<VariableDeclNode>(v->isVar, v->isMoved, v->name, std::move(t),
                                                       std::move(init), v->line, v->column,
                                                       v->bitWidth, v->isVolatile);
@@ -672,6 +688,12 @@ std::unique_ptr<ASTNode> Sema::cloneExpr(ASTNode* n,
             return std::make_unique<CastNode>(e->targetType, cloneExpr(e->value.get(), params, args),
                                               e->line, e->column);
         }
+        case ASTNodeType::SIZEOF_EXPR:
+        {
+            auto* e = dynamic_cast<SizeofExprNode*>(n);
+            auto ty = e->targetType ? substituteType(e->targetType.get(), params, args) : nullptr;
+            return std::make_unique<SizeofExprNode>(std::move(ty), e->line, e->column);
+        }
         case ASTNodeType::THIS_REF:
         {
             auto* e = dynamic_cast<ThisRefNode*>(n);
@@ -739,6 +761,10 @@ void Sema::instantiateGeneric(const std::string& mangled)
                 {
                     info.fieldElementTypes[f->name] = typeNodeToName(f->type->inner.get());
                 }
+                if (f->type->baseType == ASTNodeType::TYPE_POINTER && f->type->inner)
+                {
+                    info.fieldPointerTypes[f->name] = typeNodeToName(f->type->inner.get());
+                }
             }
         }
     }
@@ -755,17 +781,16 @@ bool Sema::tryResolveGenericType(const std::string& name)
 }
 
 // 泛型函数实例化：克隆声明 + 替换类型参数，注入主程序（mangled 名 "foo<int>"）
-void Sema::instantiateGenericFunc(const std::string& mangled)
+void Sema::instantiateGenericFunc(const std::string& tmplName, const std::string& callName)
 {
-    if (genericFuncInstances.count(mangled)) return; // 已实例化
-    size_t lt = mangled.find('<');
+    if (genericFuncInstances.count(callName)) return; // 已实例化
+    size_t lt = callName.find('<');
     if (lt == std::string::npos) return;
-    std::string base = mangled.substr(0, lt);
-    auto tIt = genericFuncTemplates.find(base);
+    auto tIt = genericFuncTemplates.find(tmplName);
     if (tIt == genericFuncTemplates.end()) return;
     FunctionDeclNode* tmpl = tIt->second;
 
-    std::string argStr = mangled.substr(lt + 1, mangled.rfind('>') - lt - 1);
+    std::string argStr = callName.substr(lt + 1, callName.rfind('>') - lt - 1);
     std::vector<std::string> args;
     size_t pos = 0;
     while (pos <= argStr.size())
@@ -780,8 +805,8 @@ void Sema::instantiateGenericFunc(const std::string& mangled)
     }
     if (args.size() != tmpl->typeParams.size()) return;
 
-    // 克隆函数：名字用 mangled，参数/返回类型替换 T → args
-    auto clone = std::make_unique<FunctionDeclNode>(mangled, tmpl->line, tmpl->column);
+    // 克隆函数：名字用调用名（含包前缀），参数/返回类型替换 T → args
+    auto clone = std::make_unique<FunctionDeclNode>(callName, tmpl->line, tmpl->column);
     clone->hasBody = tmpl->hasBody;
     clone->isExtern = tmpl->isExtern;
     clone->isPub = tmpl->isPub;
@@ -801,7 +826,8 @@ void Sema::instantiateGenericFunc(const std::string& mangled)
     clone->body = cloneBlock(tmpl->body.get(), tmpl->typeParams, args);
 
     // 注册实例符号（函数本体名即 mangled）
-    auto sym = std::make_shared<Symbol>(mangled, SymbolKind::FUNCTION, SymbolMutability::VAL, "fn",
+    // 注册实例符号：调用名（vector.push<int>）+ 模板本名（push<int>）都指向同一函数
+    auto sym = std::make_shared<Symbol>(callName, SymbolKind::FUNCTION, SymbolMutability::VAL, "fn",
                                         tmpl->line, tmpl->column);
     sym->returnType = clone->returnType ? typeNodeToName(clone->returnType.get()) : "";
     for (auto& p : clone->params)
@@ -810,8 +836,8 @@ void Sema::instantiateGenericFunc(const std::string& mangled)
     }
     sym->packageName = tmpl->packageName;
     sym->isPub = tmpl->isPub;
-    symbols.declareGlobal(mangled, sym); // 根作用域，跨函数可见
-    genericFuncInstances.insert(mangled);
+    symbols.declareGlobal(callName, sym); // 根作用域，跨函数可见
+    genericFuncInstances.insert(callName);
 
     if (currentProgram) currentProgram->decls.push_back(std::move(clone));
 }
@@ -1172,13 +1198,17 @@ std::string Sema::visitLogical(LogicalOpNode* node)
 
 std::string Sema::visitCall(FunctionCallNode* node)
 {
-    // 泛型函数调用 foo<T>(args)：实例化后按 mangled 名继续检查
+    // 泛型函数调用 foo<T>(args) / vector.push<T>(...)：实例化后按 mangled 名继续检查
     if (node->name.find('<') != std::string::npos)
     {
         size_t lt = node->name.find('<');
-        if (genericFuncTemplates.count(node->name.substr(0, lt)))
+        std::string prefix = node->name.substr(0, lt);
+        // 包限定调用（vector.push<int>）：模板名取最后一段
+        size_t dot = prefix.rfind('.');
+        std::string tmplName = (dot == std::string::npos) ? prefix : prefix.substr(dot + 1);
+        if (genericFuncTemplates.count(tmplName))
         {
-            instantiateGenericFunc(node->name);
+            instantiateGenericFunc(tmplName, node->name);
             auto gsym = symbols.lookup(node->name);
             if (gsym && gsym->kind == SymbolKind::FUNCTION)
             {
@@ -1588,6 +1618,11 @@ std::string Sema::visitVariableRef(VariableRefNode* node)
     if (dot != std::string::npos)
     {
         std::string curType = sym->typeName;
+        // 指针参数指向结构体（var -> var: Vec<T> v）：v.data 按指向类型解析
+        if ((curType == "pointer" || curType == "ptr") && pointerElementTypes.count(root))
+        {
+            curType = pointerElementTypes[root];
+        }
         std::string rest = node->name.substr(dot + 1);
         while (!rest.empty())
         {
@@ -1623,7 +1658,7 @@ std::string Sema::visitIndex(IndexNode* node)
     if (node->operand->type == ASTNodeType::VARIABLE_REF)
     {
         auto* ref = dynamic_cast<VariableRefNode*>(node->operand.get());
-        // 结构体数组成员 s.arr[i]
+        // 结构体数组成员 s.arr[i] / s.ptr[i]
         size_t mdot = ref->name.find('.');
         if (mdot != std::string::npos)
         {
@@ -1632,7 +1667,13 @@ std::string Sema::visitIndex(IndexNode* node)
             auto rsym = symbols.lookup(root);
             if (rsym)
             {
-                auto st = structRegistry.find(rsym->typeName);
+                std::string rootType = rsym->typeName;
+                // 指针参数指向结构体（var -> var: Vec<T> v）：v.data 按指向类型解析
+                if ((rootType == "pointer" || rootType == "ptr") && pointerElementTypes.count(root))
+                {
+                    rootType = pointerElementTypes[root];
+                }
+                auto st = structRegistry.find(rootType);
                 if (st != structRegistry.end())
                 {
                     auto eIt = st->second.fieldElementTypes.find(member);
@@ -1644,6 +1685,17 @@ std::string Sema::visitIndex(IndexNode* node)
                             error(node->line, node->column, "array index must be an integer, got '" + idxType + "'");
                         }
                         return eIt->second;
+                    }
+                    // 指针字段 v.data[i]：data 是 var -> var: T
+                    auto pIt = st->second.fieldPointerTypes.find(member);
+                    if (pIt != st->second.fieldPointerTypes.end())
+                    {
+                        std::string idxType = visitExpr(node->index.get());
+                        if (!idxType.empty() && !isNumericType(idxType))
+                        {
+                            error(node->line, node->column, "array index must be an integer, got '" + idxType + "'");
+                        }
+                        return pIt->second;
                     }
                 }
             }

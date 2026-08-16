@@ -89,6 +89,7 @@ static void injectExternFunction(ProgramNode* host, FunctionDeclNode* fn, const 
     decl->isPub = true;
     decl->isVariadic = fn->isVariadic;
     decl->packageName = fn->packageName;
+    decl->typeParams = fn->typeParams;   // 泛型函数模板：调用时实例化
     for (auto& p : fn->params)
     {
         decl->params.push_back(std::make_unique<ParameterNode>(
@@ -155,7 +156,12 @@ static void resolveModule(ProgramNode* hostProgram, const std::string& path, con
             if (decl->type == ASTNodeType::FUNCTION_DECL)
             {
                 auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
-                if (fn->isPub || fn->isExtern)
+                if (!fn->typeParams.empty())
+                {
+                    // 泛型函数模板：整个定义（含函数体）合并进宿主，实例化时克隆生成实现
+                    hostProgram->decls.push_back(std::move(decl));
+                }
+                else if (fn->isPub || fn->isExtern)
                 {
                     injectExternFunction(hostProgram, fn, fn->name);
                 }
