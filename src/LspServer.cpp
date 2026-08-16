@@ -189,6 +189,19 @@ void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
                           {fn->line - 1, fn->column - 1 + (int)fn->name.size()}};
             info.selectionRange = info.range;
             info.kind = "function";
+            if (fn->returnType)
+            {
+                switch (fn->returnType->baseType)
+                {
+                    case ASTNodeType::TYPE_I32: info.typeName = "int"; break;
+                    case ASTNodeType::TYPE_I64: info.typeName = "i64"; break;
+                    case ASTNodeType::TYPE_F64: info.typeName = "f64"; break;
+                    case ASTNodeType::TYPE_CHAR: info.typeName = "char"; break;
+                    case ASTNodeType::TYPE_BOOL: info.typeName = "bool"; break;
+                    case ASTNodeType::TYPE_PRIMITIVE: info.typeName = fn->returnType->name; break;
+                    default: info.typeName = "?"; break;
+                }
+            }
             doc.symbols.push_back(info);
             break;
         }
@@ -219,6 +232,21 @@ void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
                 info.kind = "parameter";
             else
                 info.kind = (v->isVar ? "variable" : "constant");
+            if (v->type)
+            {
+                switch (v->type->baseType)
+                {
+                    case ASTNodeType::TYPE_I32: info.typeName = "int"; break;
+                    case ASTNodeType::TYPE_I64: info.typeName = "i64"; break;
+                    case ASTNodeType::TYPE_F32: info.typeName = "f32"; break;
+                    case ASTNodeType::TYPE_F64: info.typeName = "f64"; break;
+                    case ASTNodeType::TYPE_CHAR: info.typeName = "char"; break;
+                    case ASTNodeType::TYPE_BOOL: info.typeName = "bool"; break;
+                    case ASTNodeType::TYPE_PRIMITIVE: info.typeName = v->type->name; break;
+                    case ASTNodeType::TYPE_POINTER: info.typeName = "pointer"; break;
+                    default: info.typeName = "?"; break;
+                }
+            }
             doc.symbols.push_back(info);
             break;
         }
@@ -413,6 +441,30 @@ llvm::json::Value LspServer::findDefinition(const std::string& uri, int line, in
     return llvm::json::Value(std::move(results));
 }
 
+llvm::json::Value LspServer::getHover(const std::string& uri, int line, int character)
+{
+    auto it = documents.find(uri);
+    if (it == documents.end()) return nullptr;
+
+    DocumentState& doc = *it->second;
+    std::string name = findSymbolNameAt(doc, line, character);
+    if (name.empty()) return nullptr;
+
+    for (const auto& sym : doc.symbols)
+    {
+        if (sym.name == name)
+        {
+            std::string value = "**" + sym.name + "**";
+            if (!sym.typeName.empty()) value += "  `" + sym.typeName + "`";
+            value += "  (" + sym.kind + ")";
+            return llvm::json::Object{
+                {"contents", llvm::json::Object{{"kind", "markdown"}, {"value", value}}}
+            };
+        }
+    }
+    return nullptr;
+}
+
 llvm::json::Value LspServer::getSymbols(const std::string& uri)
 {
     auto it = documents.find(uri);
@@ -576,6 +628,17 @@ llvm::json::Value LspServer::handleRequest(const std::string& method, const llvm
         int character = (int)*pos->getInteger("character");
         if (!uri) return nullptr;
         return findDefinition(uri->str(), line, character);
+    }
+    if (method == "textDocument/hover")
+    {
+        auto* obj = params.getAsObject();
+        auto* td = obj->getObject("textDocument");
+        auto uri = td->getString("uri");
+        auto* pos = obj->getObject("position");
+        int line = (int)*pos->getInteger("line");
+        int character = (int)*pos->getInteger("character");
+        if (!uri) return nullptr;
+        return getHover(uri->str(), line, character);
     }
     if (method == "textDocument/documentSymbol")
     {

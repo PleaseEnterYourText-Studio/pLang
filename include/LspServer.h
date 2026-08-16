@@ -29,6 +29,7 @@ struct SymbolInfo {
     LspRange range;
     LspRange selectionRange;
     std::string kind;   // function / variable / parameter / type / struct
+    std::string typeName;   // 类型（悬停显示用）
 };
 
 // 文档状态
@@ -74,6 +75,7 @@ private:
     llvm::json::Value findDefinition(const std::string& uri, int line, int character);
     llvm::json::Value getSemanticTokens(const std::string& uri);
     llvm::json::Value getSymbols(const std::string& uri);
+    llvm::json::Value getHover(const std::string& uri, int line, int character);
     llvm::json::Value getDiagnostics(const std::string& uri);
 
     // 辅助
