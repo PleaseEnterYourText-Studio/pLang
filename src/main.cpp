@@ -251,7 +251,7 @@ void resolveImports(ProgramNode* program, const std::string& stdlibRoot, bool& e
 
 // 编译整个编译单元（合并 + import 解析 + 单次语义分析/代码生成）
 bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
-                 const std::string& objPath, const std::string& stdlibRoot)
+                 const std::string& objPath, const std::string& stdlibRoot, int optLevel)
 {
     if (sources.empty()) return false;
 
@@ -356,6 +356,7 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
     // 5) 代码生成
     CodeGenerator generator;
     generator.generate(merged.get());
+    generator.optimize(optLevel);
 
     if (!generator.verify())
     {
@@ -412,13 +413,16 @@ int main(int argc, char* argv[]) {
     bool compileOnly = false;
     bool buildStatic = false;
     bool keepIntermediate = false;
+    int optLevel = 2;   // 默认 O2 优化
     std::string outputName;
     std::vector<std::string> inputFiles;
     
     // 解析参数
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "-c") {
+        if (arg.size() == 3 && arg[0] == '-' && arg[1] == 'O') {
+            optLevel = arg[2] - '0';
+        } else if (arg == "-c") {
             compileOnly = true;
         } else if (arg == "-static") {
             buildStatic = true;
@@ -463,7 +467,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "compiling " << sources.size() << " file(s) -> " << obj << std::endl;
     std::string stdlibRoot = getStdlibRoot(argv[0]);
-    if (!compileUnit(sources, keepIntermediate, obj, stdlibRoot)) {
+    if (!compileUnit(sources, keepIntermediate, obj, stdlibRoot, optLevel)) {
         return 1;
     }
     std::vector<std::string> objFiles = { obj };

@@ -109,6 +109,7 @@ public:
     ~CodeGenerator() = default;
 
     void generate(ProgramNode* root);
+    void optimize(int optLevel);    // LLVM 优化 pass（0=不优化）
     void printIR();
     void saveToFile(const std::string& filename);
     bool verify();

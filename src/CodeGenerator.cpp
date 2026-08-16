@@ -10,6 +10,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
 
 // 类型大小（字节）：用于 union 取最大字段
 static unsigned typeSizeBytes(llvm::Type* ty);
@@ -924,6 +925,42 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
             builder.CreateRet(llvm::ConstantInt::get(retType, 0));
         }
     }
+}
+
+// 运行 LLVM 优化管线（需先设置目标三元组与数据布局）
+void CodeGenerator::optimize(int optLevel)
+{
+    if (optLevel <= 0) return;
+
+    llvm::InitializeNativeTarget();
+    auto triple = llvm::Triple(llvm::sys::getDefaultTargetTriple());
+    module->setTargetTriple(triple);
+    std::string error;
+    auto* target = llvm::TargetRegistry::lookupTarget(triple, error);
+    if (!target) return;
+    auto* tm = target->createTargetMachine(triple, "generic", "", llvm::TargetOptions(), llvm::Reloc::PIC_);
+    module->setDataLayout(tm->createDataLayout());
+
+    llvm::OptimizationLevel OL;
+    switch (optLevel)
+    {
+        case 1: OL = llvm::OptimizationLevel::O1; break;
+        case 3: OL = llvm::OptimizationLevel::O3; break;
+        default: OL = llvm::OptimizationLevel::O2; break;
+    }
+
+    llvm::LoopAnalysisManager LAM;
+    llvm::FunctionAnalysisManager FAM;
+    llvm::CGSCCAnalysisManager CGAM;
+    llvm::ModuleAnalysisManager MAM;
+    llvm::PassBuilder PB;
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    llvm::ModulePassManager MPM = PB.buildPerModuleDefaultPipeline(OL);
+    MPM.run(*module, MAM);
 }
 
 void CodeGenerator::generate(ProgramNode* root)
