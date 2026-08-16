@@ -10,8 +10,6 @@
 | `std.thread` | `import std.thread;` | 多线程：线程创建/等待、互斥锁、休眠、让出 CPU |
 | `std.io` | `import std.io;` | 标准输入输出：打印、读输入、数字格式化 |
 
-> `std.vector` / `std.string` 在文档中已规划，尚未实现（导入会被忽略）。
-
 ---
 
 # std.thread 多线程
