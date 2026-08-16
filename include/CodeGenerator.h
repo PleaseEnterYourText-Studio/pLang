@@ -83,6 +83,13 @@ private:
     // 递归填充初始化列表 {1, 2, {3, 4}}（结构体按字段、数组按元素，支持嵌套）
     void fillInitList(llvm::Value* ptr, llvm::Type* targetTy, BlockStmtNode* block);
 
+    // goto/label：函数内 label → 基本块（generateFunction 预建）
+    std::unordered_map<std::string, llvm::BasicBlock*> labelBlocks;
+    void collectLabelBlocks(ASTNode* node, llvm::Function* func);
+    void generateGoto(GotoStmtNode* node);
+    void generateLabel(LabelStmtNode* node);
+    void generateSwitch(SwitchStmtNode* node);
+
     // std.thread 内置调用生成
     llvm::Value* generateThreadBuiltin(FunctionCallNode* call);
     // std.atomic 原子内置调用生成

@@ -585,10 +585,21 @@ void CodeGenerator::generateStatement(ASTNode* node)
         case ASTNodeType::BLOCK_STMT: {
             auto* block = static_cast<BlockStmtNode*>(node);
             for (auto& stmt : block->statements) {
+                // 前一条语句已终结（return/goto）且当前不是 label：进入不可达块
+                if (builder.GetInsertBlock()->getTerminator() &&
+                    stmt->type != ASTNodeType::LABEL_STMT)
+                {
+                    llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(
+                        context, "dead", builder.GetInsertBlock()->getParent());
+                    builder.SetInsertPoint(deadBB);
+                }
                 generateStatement(stmt.get());
             }
             break;
         }
+        case ASTNodeType::GOTO_STMT: { generateGoto(static_cast<GotoStmtNode*>(node)); break; }
+        case ASTNodeType::LABEL_STMT: { generateLabel(static_cast<LabelStmtNode*>(node)); break; }
+        case ASTNodeType::SWITCH_STMT: { generateSwitch(static_cast<SwitchStmtNode*>(node)); break; }
 
         case ASTNodeType::ASM_STMT: {
             auto* asmNode = static_cast<AsmNode*>(node);
@@ -760,6 +771,103 @@ void CodeGenerator::generateStatement(ASTNode* node)
     }
 }
 
+// 预扫描函数体收集 label 并创建对应基本块
+void CodeGenerator::collectLabelBlocks(ASTNode* node, llvm::Function* func)
+{
+    if (!node) return;
+    if (node->type == ASTNodeType::LABEL_STMT)
+    {
+        auto* label = dynamic_cast<LabelStmtNode*>(node);
+        if (!labelBlocks.count(label->name))
+        {
+            labelBlocks[label->name] = llvm::BasicBlock::Create(context, "label." + label->name, func);
+        }
+        return;
+    }
+    if (node->type == ASTNodeType::BLOCK_STMT)
+    {
+        for (auto& st : dynamic_cast<BlockStmtNode*>(node)->statements) collectLabelBlocks(st.get(), func);
+    }
+    else if (node->type == ASTNodeType::IF_STMT)
+    {
+        auto* ifn = dynamic_cast<IfStmtNode*>(node);
+        collectLabelBlocks(ifn->thenBranch.get(), func);
+        collectLabelBlocks(ifn->elseBranch.get(), func);
+    }
+    else if (node->type == ASTNodeType::WHILE_STMT)
+    {
+        collectLabelBlocks(dynamic_cast<WhileStmtNode*>(node)->body.get(), func);
+    }
+    else if (node->type == ASTNodeType::FOR_STMT)
+    {
+        auto* fn = dynamic_cast<ForStmtNode*>(node);
+        collectLabelBlocks(fn->init.get(), func);
+        collectLabelBlocks(fn->body.get(), func);
+    }
+    else if (node->type == ASTNodeType::SWITCH_STMT)
+    {
+        for (auto& c : dynamic_cast<SwitchStmtNode*>(node)->cases) collectLabelBlocks(c.body.get(), func);
+    }
+}
+
+void CodeGenerator::generateGoto(GotoStmtNode* node)
+{
+    auto it = labelBlocks.find(node->label);
+    if (it != labelBlocks.end())
+    {
+        builder.CreateBr(it->second);
+    }
+}
+
+void CodeGenerator::generateLabel(LabelStmtNode* node)
+{
+    auto it = labelBlocks.find(node->name);
+    if (it == labelBlocks.end()) return;
+    // 落入 label：当前块（未终结时）跳到 label 块，再从 label 块继续
+    if (!builder.GetInsertBlock()->getTerminator())
+    {
+        builder.CreateBr(it->second);
+    }
+    builder.SetInsertPoint(it->second);
+}
+
+void CodeGenerator::generateSwitch(SwitchStmtNode* node)
+{
+    llvm::Function* func = builder.GetInsertBlock()->getParent();
+    llvm::Value* cond = generateExpression(node->condition.get());
+    if (!cond) return;
+
+    llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(context, "switch.merge", func);
+    llvm::SwitchInst* si = builder.CreateSwitch(cond, mergeBB, (unsigned)node->cases.size());
+
+    for (auto& c : node->cases)
+    {
+        if (c.isDefault)
+        {
+            // default 分支体直接在当前 default 块（merge 兼任无 default 的落点）
+            if (c.body)
+            {
+                llvm::BasicBlock* defBB = llvm::BasicBlock::Create(context, "switch.default", func);
+                si->setDefaultDest(defBB);
+                builder.SetInsertPoint(defBB);
+                generateStatement(c.body.get());
+                if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(mergeBB);
+            }
+        }
+        else
+        {
+            llvm::BasicBlock* caseBB = llvm::BasicBlock::Create(context, "switch.case", func);
+            auto* caseVal = llvm::cast<llvm::ConstantInt>(
+                llvm::ConstantInt::get(cond->getType(), (uint64_t)c.value, true));
+            si->addCase(caseVal, caseBB);
+            builder.SetInsertPoint(caseBB);
+            if (c.body) generateStatement(c.body.get());
+            if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(mergeBB);
+        }
+    }
+    builder.SetInsertPoint(mergeBB);
+}
+
 void CodeGenerator::generateFunction(FunctionDeclNode* fn)
 {
     if (!fn || !fn->body) return;
@@ -780,9 +888,10 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
         func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn->name, module.get());
     }
     currentFunction = func;
-
+    labelBlocks.clear();
     llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(context, "entry", func);
     builder.SetInsertPoint(entryBB);
+    collectLabelBlocks(fn->body.get(), func);
 
     // 参数绑定
     size_t idx = 0;
@@ -941,9 +1050,17 @@ void CodeGenerator::generate(ProgramNode* root)
     llvm::Function* mainFunc = llvm::Function::Create(
         mainType, llvm::Function::ExternalLinkage, "main", module.get());
     currentFunction = mainFunc;
-
+    labelBlocks.clear();
     llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(context, "entry", mainFunc);
     builder.SetInsertPoint(entryBB);
+    for (auto& decl : root->decls)
+    {
+        if (decl->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+            if (fn->name == "main" && fn->body) collectLabelBlocks(fn->body.get(), mainFunc);
+        }
+    }
 
     for (auto& decl : root->decls)
     {

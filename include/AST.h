@@ -49,6 +49,9 @@ enum class ASTNodeType
     TYPE_PARAM,
     TEMPLATE_DECL,
     DO_WHILE_STMT,
+    GOTO_STMT,
+    LABEL_STMT,
+    SWITCH_STMT,
     MEMBER_ACCESS,
     ADDRESS_OF,
     DEREF,
@@ -386,15 +389,6 @@ struct ReturnStmtNode : ASTNode
         : ASTNode(ASTNodeType::RETURN_STMT, line, column), value(std::move(value)) {}
 };
 
-// 表达式语句
-struct ExpressionStmtNode : ASTNode
-{
-    std::unique_ptr<ASTNode> expr;
-
-    ExpressionStmtNode(std::unique_ptr<ASTNode> expr, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::EXPRESSION_STMT, line, column), expr(std::move(expr)) {}
-};
-
 // 块语句
 struct BlockStmtNode : ASTNode
 {
@@ -405,6 +399,52 @@ struct BlockStmtNode : ASTNode
 };
 
 // if 语句
+// goto 语句
+struct GotoStmtNode : ASTNode
+{
+    std::string label;
+
+    GotoStmtNode(const std::string& label, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::GOTO_STMT, line, column), label(label) {}
+};
+
+// label 语句
+struct LabelStmtNode : ASTNode
+{
+    std::string name;
+
+    LabelStmtNode(const std::string& name, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::LABEL_STMT, line, column), name(name) {}
+};
+
+// switch 分支
+struct SwitchCase
+{
+    long long value = 0;        // case 常量值
+    bool isDefault = false;
+    std::unique_ptr<BlockStmtNode> body;
+};
+
+// switch 语句（隐式 break，case 之间不贯穿）
+struct SwitchStmtNode : ASTNode
+{
+    std::unique_ptr<ASTNode> condition;
+    std::vector<SwitchCase> cases;
+
+    SwitchStmtNode(std::unique_ptr<ASTNode> condition, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::SWITCH_STMT, line, column), condition(std::move(condition)) {}
+};
+
+// 表达式语句
+struct ExpressionStmtNode : ASTNode
+{
+    std::unique_ptr<ASTNode> expr;
+
+    ExpressionStmtNode(std::unique_ptr<ASTNode> expr, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::EXPRESSION_STMT, line, column), expr(std::move(expr)) {}
+};
+
+
 struct IfStmtNode : ASTNode
 {
     std::unique_ptr<ASTNode> condition;

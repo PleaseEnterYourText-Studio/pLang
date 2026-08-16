@@ -206,6 +206,8 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     currentReturnType = node->returnType ? typeNodeToName(node->returnType.get()) : "";
     currentFunctionName = node->name;
     currentPackage = node->packageName;
+    functionLabels.clear();
+    duplicateLabels.clear();
 
     // 参数
     for (auto& param : node->params)
@@ -234,6 +236,8 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
 
     if (node->body)
     {
+        // 预扫描 label（支持前向 goto）
+        collectLabels(node->body.get());
         visitBlock(node->body.get());
     }
 
@@ -330,6 +334,15 @@ void Sema::visitStmt(ASTNode* node)
             break;
         case ASTNodeType::FOR_STMT:
             visitFor(dynamic_cast<ForStmtNode*>(node));
+            break;
+        case ASTNodeType::GOTO_STMT:
+            visitGoto(dynamic_cast<GotoStmtNode*>(node));
+            break;
+        case ASTNodeType::LABEL_STMT:
+            visitLabel(dynamic_cast<LabelStmtNode*>(node));
+            break;
+        case ASTNodeType::SWITCH_STMT:
+            visitSwitch(dynamic_cast<SwitchStmtNode*>(node));
             break;
         case ASTNodeType::RETURN_STMT:
             visitReturn(dynamic_cast<ReturnStmtNode*>(node));
@@ -448,6 +461,77 @@ void Sema::visitWhile(WhileStmtNode* node)
         visitExpr(node->condition.get());
     }
     if (node->body) visitStmt(node->body.get());
+}
+
+void Sema::collectLabels(ASTNode* node)
+{
+    if (!node) return;
+    if (node->type == ASTNodeType::LABEL_STMT)
+    {
+        functionLabels.insert(dynamic_cast<LabelStmtNode*>(node)->name);
+        return;
+    }
+    if (node->type == ASTNodeType::BLOCK_STMT)
+    {
+        for (auto& st : dynamic_cast<BlockStmtNode*>(node)->statements) collectLabels(st.get());
+    }
+    else if (node->type == ASTNodeType::IF_STMT)
+    {
+        auto* ifn = dynamic_cast<IfStmtNode*>(node);
+        collectLabels(ifn->thenBranch.get());
+        collectLabels(ifn->elseBranch.get());
+    }
+    else if (node->type == ASTNodeType::WHILE_STMT)
+    {
+        collectLabels(dynamic_cast<WhileStmtNode*>(node)->body.get());
+    }
+    else if (node->type == ASTNodeType::FOR_STMT)
+    {
+        auto* fn = dynamic_cast<ForStmtNode*>(node);
+        collectLabels(fn->init.get());
+        collectLabels(fn->body.get());
+    }
+    else if (node->type == ASTNodeType::SWITCH_STMT)
+    {
+        for (auto& c : dynamic_cast<SwitchStmtNode*>(node)->cases) collectLabels(c.body.get());
+    }
+}
+
+void Sema::visitGoto(GotoStmtNode* node)
+{
+    if (functionLabels.find(node->label) == functionLabels.end())
+    {
+        error(node->line, node->column, "undefined label '" + node->label + "'");
+    }
+}
+
+void Sema::visitLabel(LabelStmtNode* node)
+{
+    if (!duplicateLabels.insert(node->name).second)
+    {
+        error(node->line, node->column, "duplicate label '" + node->name + "'");
+    }
+}
+
+void Sema::visitSwitch(SwitchStmtNode* node)
+{
+    std::string condType = visitExpr(node->condition.get());
+    if (!condType.empty() && !isNumericType(condType))
+    {
+        error(node->line, node->column, "switch condition must be numeric, got '" + condType + "'");
+    }
+    std::set<long long> seen;
+    for (auto& c : node->cases)
+    {
+        if (!c.isDefault)
+        {
+            if (!seen.insert(c.value).second)
+            {
+                error(node->line, node->column, "duplicate case value " + std::to_string(c.value));
+            }
+        }
+        if (c.body) visitStmt(c.body.get());
+    }
 }
 
 void Sema::visitFor(ForStmtNode* node)

@@ -50,6 +50,8 @@ private:
         std::unordered_map<std::string, std::string> fieldElementTypes; // 数组成员 → 元素类型
     };
     std::unordered_map<std::string, StructInfo> structRegistry;
+    std::set<std::string> functionLabels;   // 当前函数的 label 集合
+    std::set<std::string> duplicateLabels;  // 重复 label 检测
 
 public:
     bool analyze(std::unique_ptr<ProgramNode>& program);
@@ -74,6 +76,9 @@ private:
     void visitIf(IfStmtNode* node);
     void visitWhile(WhileStmtNode* node);
     void visitFor(ForStmtNode* node);
+    void visitGoto(GotoStmtNode* node);
+    void visitLabel(LabelStmtNode* node);
+    void visitSwitch(SwitchStmtNode* node);
     void visitReturn(ReturnStmtNode* node);
     void visitExprStmt(ExpressionStmtNode* node);
 
@@ -93,6 +98,7 @@ private:
     std::string visitVariableRef(VariableRefNode* node);
     std::string visitIndex(IndexNode* node);    // 数组下标 buf[i]
     std::string visitAssignment(AssignmentNode* node);
+    void collectLabels(ASTNode* node);      // 预扫描函数体收集 label
 
     // 类型工具
     std::string typeNodeToName(TypeNode* type);

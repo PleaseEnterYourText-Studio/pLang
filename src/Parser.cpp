@@ -560,6 +560,9 @@ std::unique_ptr<ASTNode> Parser::parseStatement()
     if (check(TokenType::WHILE)) return parseWhile();
     if (check(TokenType::FOR)) return parseFor();
     if (check(TokenType::DO)) return parseDoWhile();
+    if (check(TokenType::GOTO)) return parseGoto();
+    if (check(TokenType::LABEL)) return parseLabel();
+    if (check(TokenType::SWITCH)) return parseSwitch();
     if (check(TokenType::RETURN)) return parseReturn();
     if (check(TokenType::ASM)) return parseAsm();
     if (check(TokenType::LBRACE)) return parseBlock();
@@ -803,6 +806,64 @@ std::unique_ptr<ASTNode> Parser::parseDoWhile()
     expect(TokenType::RPAREN, "expected )");
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<WhileStmtNode>(std::move(cond), std::move(body), start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseGoto()
+{
+    Token start = expect(TokenType::GOTO, "expected goto");
+    Token name = expect(TokenType::IDENT, "expected label name");
+    expect(TokenType::SEMICOLON, "expected ; after goto");
+    return std::make_unique<GotoStmtNode>(name.text, start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseLabel()
+{
+    Token start = expect(TokenType::LABEL, "expected label");
+    Token name = expect(TokenType::IDENT, "expected label name");
+    expect(TokenType::SEMICOLON, "expected ; after label");
+    return std::make_unique<LabelStmtNode>(name.text, start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseSwitch()
+{
+    Token start = expect(TokenType::SWITCH, "expected switch");
+    expect(TokenType::LPAREN, "expected ( after switch");
+    auto cond = parseExpression();
+    expect(TokenType::RPAREN, "expected )");
+    expect(TokenType::LBRACE, "expected {");
+    auto sw = std::make_unique<SwitchStmtNode>(std::move(cond), start.line, start.column);
+
+    while (!check(TokenType::RBRACE) && !isAtEnd())
+    {
+        SwitchCase c;
+        if (match(TokenType::CASE))
+        {
+            Token v = expect(TokenType::NUMBER, "expected case value");
+            c.value = std::stoll(v.text);
+        }
+        else if (match(TokenType::DEFAULT))
+        {
+            c.isDefault = true;
+        }
+        else
+        {
+            errorLine = peek().line;
+            errorColumn = peek().column;
+            throw std::runtime_error("expected case or default in switch");
+        }
+        expect(TokenType::COLON, "expected : after case/default");
+        auto body = std::make_unique<BlockStmtNode>(previous().line, previous().column);
+        while (!check(TokenType::CASE) && !check(TokenType::DEFAULT) &&
+               !check(TokenType::RBRACE) && !isAtEnd())
+        {
+            auto stmt = parseStatement();
+            if (stmt) body->statements.push_back(std::move(stmt));
+        }
+        c.body = std::move(body);
+        sw->cases.push_back(std::move(c));
+    }
+    expect(TokenType::RBRACE, "expected } after switch");
+    return sw;
 }
 
 std::unique_ptr<ASTNode> Parser::parseReturn()
