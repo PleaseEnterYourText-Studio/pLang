@@ -651,7 +651,15 @@ void CodeGenerator::generateStatement(ASTNode* node)
                     builder.CreateRet(val);
                 }
             } else {
-                builder.CreateRetVoid();
+                // 无值 return：按函数返回类型（void → RetVoid；否则 ret 0）
+                llvm::Type* rt = currentFunction ? currentFunction->getReturnType() : nullptr;
+                if (rt && rt->isVoidTy()) {
+                    builder.CreateRetVoid();
+                } else if (rt) {
+                    builder.CreateRet(llvm::ConstantInt::get(rt, 0));
+                } else {
+                    builder.CreateRetVoid();
+                }
             }
             break;
         }
