@@ -1076,7 +1076,7 @@ void CodeGenerator::optimize(int optLevel)
     MPM.run(*module, MAM);
 }
 
-void CodeGenerator::generate(ProgramNode* root)
+void CodeGenerator::generate(ProgramNode* root, bool emitMain)
 {
     if (!root) return;
 
@@ -1254,7 +1254,9 @@ void CodeGenerator::generate(ProgramNode* root)
         }
     }
 
-    // main 函数作为入口，返回 int
+    // main 函数作为入口（库包不生成）
+    if (emitMain)
+    {
     llvm::FunctionType* mainType = llvm::FunctionType::get(
         llvm::Type::getInt32Ty(context), false);
     llvm::Function* mainFunc = llvm::Function::Create(
@@ -1288,6 +1290,7 @@ void CodeGenerator::generate(ProgramNode* root)
 
     if (!builder.GetInsertBlock()->getTerminator()) {
         builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0)));
+    }
     }
 
     // 收尾 DWARF

@@ -14,6 +14,7 @@
 #include "CodeGenerator.h"
 #include "AST.h"
 #include "token.h"
+#include "Importer.h"
 
 namespace fs = std::filesystem;
 
@@ -253,9 +254,42 @@ void resolveImports(ProgramNode* program, const std::string& stdlibRoot, bool& e
     }
 }
 
+// 编译单个包（独立编译单元）：parse → 合并 → 自身 import 的 extern 注入 → 单次代码生成
+bool compilePackage(const std::vector<std::string>& files,
+                    const std::string& stdlibRoot, int optLevel,
+                    const std::string& objPath)
+{
+    if (files.empty()) return false;
+    std::vector<std::unique_ptr<ProgramNode>> programs;
+    for (const auto& src : files)
+    {
+        std::unique_ptr<ProgramNode> prog;
+        if (!plangParseSourceFile(src, prog)) return false;
+        programs.push_back(std::move(prog));
+    }
+    std::unique_ptr<ProgramNode> merged = std::move(programs[0]);
+    for (size_t i = 1; i < programs.size(); ++i)
+    {
+        for (auto& d : programs[i]->decls) merged->decls.push_back(std::move(d));
+        for (auto& imp : programs[i]->imports) merged->imports.push_back(std::move(imp));
+        if (merged->packageName.empty()) merged->packageName = programs[i]->packageName;
+    }
+    bool importError = false;
+    plangResolveImports(merged.get(), stdlibRoot, importError);
+    if (importError) return false;
+
+    Sema sema;
+    if (!sema.analyze(merged)) return false;
+    CodeGenerator generator;
+    generator.generate(merged.get(), false); // 库包无入口
+    generator.optimize(optLevel);
+    return generator.emitObject(objPath);
+}
+
 // 编译整个编译单元（合并 + import 解析 + 单次语义分析/代码生成）
 bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
-                 const std::string& objPath, const std::string& stdlibRoot, int optLevel)
+                 const std::string& objPath, const std::string& stdlibRoot, int optLevel,
+                 std::vector<std::string>& extraObjs)
 {
     if (sources.empty()) return false;
 
@@ -330,6 +364,7 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
         }
     }
 
+    std::cerr << "[dbg] parse ok, files=" << programs.size() << std::endl;
     // 2) 合并：以第一个文件为主程序，其余文件声明与 import 并入
     std::unique_ptr<ProgramNode> merged = std::move(programs[0]);
     for (size_t i = 1; i < programs.size(); ++i)
@@ -345,14 +380,17 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
         if (merged->packageName.empty()) merged->packageName = programs[i]->packageName;
     }
 
-    // 3) 解析 import：加载标准库包源码并合并
+    // 3) 解析 import：库包函数注入 extern 声明、类型合并；记录包路径供独立编译
     bool importError = false;
-    resolveImports(merged.get(), stdlibRoot, importError);
+    std::vector<std::string> packages;
+    plangResolveImports(merged.get(), stdlibRoot, importError, &packages);
     if (importError) return false;
 
+    std::cerr << "[dbg] resolve ok, decls=" << merged->decls.size() << std::endl;
     // 4) 语义分析
     Sema sema;
     bool ok = sema.analyze(merged);
+    std::cerr << "[dbg] sema done, errors=" << sema.getErrors().size() << std::endl;
     for (const auto& w : sema.getWarnings())
     {
         printWarning(sources[0], sourceTexts[0], w.line, w.column, w.message);
@@ -395,6 +433,31 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
     {
         std::cerr << sources[0] << ": error: object generation failed\n";
         return false;
+    }
+
+    // 4) 独立编译每个导入的库包为 .o（与主模块链接）
+    for (const auto& pkg : packages)
+    {
+        std::string pkgPath = pkg;
+        std::replace(pkgPath.begin(), pkgPath.end(), '.', '/');
+        fs::path pkgDir = fs::path(stdlibRoot) / pkgPath;
+        if (!fs::is_directory(pkgDir)) continue;
+        std::vector<std::string> pkgFiles;
+        for (const auto& entry : fs::directory_iterator(pkgDir))
+        {
+            if (entry.path().extension() == ".plang") pkgFiles.push_back(entry.path().string());
+        }
+        if (pkgFiles.empty()) continue;
+
+        std::string safeName = pkg;
+        std::replace(safeName.begin(), safeName.end(), '.', '_');
+        std::string pkgObj = "plangc_lib_" + safeName + ".o";
+        std::cout << "compiling package " << pkg << " -> " << pkgObj << std::endl;
+        if (!compilePackage(pkgFiles, stdlibRoot, optLevel, pkgObj))
+        {
+            return false;
+        }
+        extraObjs.push_back(pkgObj);
     }
 
     return true;
@@ -487,10 +550,12 @@ int main(int argc, char* argv[]) {
 
     std::cout << "compiling " << sources.size() << " file(s) -> " << obj << std::endl;
     std::string stdlibRoot = getStdlibRoot(argv[0]);
-    if (!compileUnit(sources, keepIntermediate, obj, stdlibRoot, optLevel)) {
+    std::vector<std::string> extraObjs;
+    if (!compileUnit(sources, keepIntermediate, obj, stdlibRoot, optLevel, extraObjs)) {
         return 1;
     }
     std::vector<std::string> objFiles = { obj };
+    for (auto& eo : extraObjs) objFiles.push_back(eo);
     
     // 阶段2：根据模式处理
     if (compileOnly) {

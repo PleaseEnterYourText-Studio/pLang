@@ -117,7 +117,7 @@ public:
     CodeGenerator();
     ~CodeGenerator() = default;
 
-    void generate(ProgramNode* root);
+    void generate(ProgramNode* root, bool emitMain = true);  // emitMain=false 用于库包（无入口）
     void setupDebugInfo();          // 模块级 DWARF 调试信息
     void setFunctionDebugInfo(llvm::Function* fn);  // 为函数建 DISubprogram
     void optimize(int optLevel);    // LLVM 优化 pass（0=不优化）

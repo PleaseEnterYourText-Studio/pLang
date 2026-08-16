@@ -68,10 +68,40 @@ std::string plangGetStdlibRoot(const std::string& exePath)
     return exeAbs.parent_path().parent_path().string();
 }
 
+// 深拷贝 TypeNode
+std::unique_ptr<TypeNode> plangCloneType(TypeNode* t)
+{
+    if (!t) return nullptr;
+    if (t->baseType == ASTNodeType::TYPE_POINTER || t->baseType == ASTNodeType::TYPE_ARRAY)
+    {
+        return std::make_unique<TypeNode>(t->baseType, t->name, t->line, t->column,
+                                          t->arraySize, plangCloneType(t->inner.get()), t->isConst);
+    }
+    return std::make_unique<TypeNode>(t->baseType, t->name, t->line, t->column,
+                                      t->arraySize, nullptr, t->isConst);
+}
+
+// 把库的函数克隆为 extern 声明（独立编译：定义留在库包 .o）
+static void injectExternFunction(ProgramNode* host, FunctionDeclNode* fn, const std::string& name)
+{
+    auto decl = std::make_unique<FunctionDeclNode>(name, fn->line, fn->column);
+    decl->isExtern = true;
+    decl->isPub = true;
+    decl->isVariadic = fn->isVariadic;
+    decl->packageName = fn->packageName;
+    for (auto& p : fn->params)
+    {
+        decl->params.push_back(std::make_unique<ParameterNode>(
+            p->isVar, p->name, plangCloneType(p->type.get()), p->line, p->column));
+    }
+    if (fn->returnType) decl->returnType = plangCloneType(fn->returnType.get());
+    host->decls.push_back(std::move(decl));
+}
+
 // 递归解析导入的包并合并其声明到宿主程序（带环检测）
 static void resolveModule(ProgramNode* hostProgram, const std::string& path, const std::string& stdlibRoot,
                           std::set<std::string>& resolved, std::vector<std::string>& importStack,
-                          bool& errorFlag)
+                          bool& errorFlag, std::vector<std::string>* resolvedPackages)
 {
     if (resolved.count(path)) return;
 
@@ -115,12 +145,45 @@ static void resolveModule(ProgramNode* hostProgram, const std::string& path, con
             auto* importNode = dynamic_cast<ImportStmtNode*>(imp.get());
             if (importNode)
             {
-                resolveModule(hostProgram, importNode->path, stdlibRoot, resolved, importStack, errorFlag);
+                resolveModule(hostProgram, importNode->path, stdlibRoot, resolved, importStack,
+                              errorFlag, resolvedPackages);
             }
         }
         for (auto& decl : libProgram->decls)
         {
-            hostProgram->decls.push_back(std::move(decl));
+            // 独立编译：函数注入 extern 声明（定义在库包 .o）；类型/结构体合并
+            if (decl->type == ASTNodeType::FUNCTION_DECL)
+            {
+                auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+                if (fn->isPub || fn->isExtern)
+                {
+                    injectExternFunction(hostProgram, fn, fn->name);
+                }
+            }
+            else if (decl->type == ASTNodeType::STRUCT_DECL ||
+                     decl->type == ASTNodeType::USING_DECL)
+            {
+                // 结构体方法 → extern 声明（方法定义在库包 .o）；先取指针再 move
+                auto* sn = dynamic_cast<StructDeclNode*>(
+                    (decl->type == ASTNodeType::STRUCT_DECL) ? decl.get()
+                        : dynamic_cast<UsingDeclNode*>(decl.get())->aliased.get());
+                hostProgram->decls.push_back(std::move(decl));
+                if (sn)
+                {
+                    for (auto& m : sn->members)
+                    {
+                        if (m->type == ASTNodeType::FUNCTION_DECL)
+                        {
+                            auto* fn = dynamic_cast<FunctionDeclNode*>(m.get());
+                            injectExternFunction(hostProgram, fn, sn->name + "." + fn->name);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                hostProgram->decls.push_back(std::move(decl));
+            }
         }
         for (auto& imp : libProgram->imports)
         {
@@ -129,9 +192,11 @@ static void resolveModule(ProgramNode* hostProgram, const std::string& path, con
     }
     importStack.pop_back();
     resolved.insert(path);
+    if (resolvedPackages) resolvedPackages->push_back(path);
 }
 
-void plangResolveImports(ProgramNode* hostProgram, const std::string& stdlibRoot, bool& errorFlag)
+void plangResolveImports(ProgramNode* hostProgram, const std::string& stdlibRoot, bool& errorFlag,
+                         std::vector<std::string>* resolvedPackages)
 {
     std::set<std::string> resolved;
     std::vector<std::string> importStack;
@@ -143,6 +208,6 @@ void plangResolveImports(ProgramNode* hostProgram, const std::string& stdlibRoot
     }
     for (const auto& path : paths)
     {
-        resolveModule(hostProgram, path, stdlibRoot, resolved, importStack, errorFlag);
+        resolveModule(hostProgram, path, stdlibRoot, resolved, importStack, errorFlag, resolvedPackages);
     }
 }

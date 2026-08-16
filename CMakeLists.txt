@@ -96,6 +96,7 @@ add_executable(PLang
     src/Sema.cpp
     src/SymbolTable.cpp
     src/CodeGenerator.cpp
+    src/Importer.cpp
 )
 
 # LSP 服务器
