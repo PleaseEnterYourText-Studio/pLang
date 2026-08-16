@@ -733,7 +733,7 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn)
 
     llvm::Function* func = module->getFunction(fn->name);
     if (!func) {
-        llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+        llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, fn->isVariadic);
         func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, fn->name, module.get());
     }
     currentFunction = func;
@@ -863,7 +863,7 @@ void CodeGenerator::generate(ProgramNode* root)
                     for (auto& param : fn->params) {
                         paramTypes.push_back(getLLVMType(param->type.get()));
                     }
-                    llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, false);
+                    llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, fn->isVariadic);
                     if (!module->getFunction(fn->name)) {
                         llvm::Function::Create(ft, llvm::Function::ExternalLinkage, fn->name, module.get());
                     }

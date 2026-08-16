@@ -36,11 +36,12 @@ struct Symbol
     std::string packageName;        // 所属包（如 "std.thread"）
     bool isPub;                     // 跨包可见
     bool isExtern;                  // extern FFI 声明
+    bool isVariadic;                // 变参函数
 
     Symbol(const std::string& name, SymbolKind kind, SymbolMutability mutability,
            const std::string& typeName, int line = 0, int column = 0)
         : name(name), kind(kind), mutability(mutability), typeName(typeName),
-          line(line), column(column), isPub(false), isExtern(false) {}
+          line(line), column(column), isPub(false), isExtern(false), isVariadic(false) {}
 };
 
 // 单个作用域

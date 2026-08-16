@@ -62,6 +62,7 @@ void Sema::visitProgram(ProgramNode* node)
             sym->packageName = funcNode->packageName;
             sym->isPub = funcNode->isPub;
             sym->isExtern = funcNode->isExtern;
+            sym->isVariadic = funcNode->isVariadic;
             if (!symbols.declare(funcNode->name, sym))
             {
                 error(funcNode->line, funcNode->column, "duplicate function '" + funcNode->name + "'");
@@ -635,10 +636,19 @@ std::string Sema::visitCall(FunctionCallNode* node)
                 error(node->line, node->column, "function '" + node->name + "' is not public");
                 return "";
             }
-            // 参数数量检查
+            // 参数数量检查（变参函数允许至少 N 个）
             if (!pkgSym->paramTypes.empty() || !node->arguments.empty())
             {
-                if (pkgSym->paramTypes.size() != node->arguments.size())
+                if (pkgSym->isVariadic)
+                {
+                    if (node->arguments.size() < pkgSym->paramTypes.size())
+                    {
+                        error(node->line, node->column, "function '" + node->name + "' expects at least " +
+                              std::to_string(pkgSym->paramTypes.size()) + " argument(s), got " +
+                              std::to_string(node->arguments.size()));
+                    }
+                }
+                else if (pkgSym->paramTypes.size() != node->arguments.size())
                 {
                     error(node->line, node->column, "function '" + node->name + "' expects " +
                           std::to_string(pkgSym->paramTypes.size()) + " argument(s), got " +
@@ -710,10 +720,19 @@ std::string Sema::visitCall(FunctionCallNode* node)
         return "";
     }
 
-    // 参数数量检查
+    // 参数数量检查（变参函数允许至少 N 个）
     if (!sym->paramTypes.empty() || !node->arguments.empty())
     {
-        if (sym->paramTypes.size() != node->arguments.size())
+        if (sym->isVariadic)
+        {
+            if (node->arguments.size() < sym->paramTypes.size())
+            {
+                error(node->line, node->column, "function '" + node->name + "' expects at least " +
+                      std::to_string(sym->paramTypes.size()) + " argument(s), got " +
+                      std::to_string(node->arguments.size()));
+            }
+        }
+        else if (sym->paramTypes.size() != node->arguments.size())
         {
             error(node->line, node->column, "function '" + node->name + "' expects " +
                   std::to_string(sym->paramTypes.size()) + " argument(s), got " +

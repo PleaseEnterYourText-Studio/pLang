@@ -353,6 +353,13 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
     {
         do
         {
+            // 变参标记 ...（仅 extern 声明有意义）
+            if (check(TokenType::DOT) && peek(1).type == TokenType::DOT && peek(2).type == TokenType::DOT)
+            {
+                advance(); advance(); advance();
+                fnDecl->isVariadic = true;
+                break;
+            }
             bool isVar = true;
             if (match(TokenType::VAL)) isVar = false;
             else if (match(TokenType::VAR)) isVar = true;
@@ -387,7 +394,8 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
             Token pname = expect(TokenType::IDENT, "expected parameter name");
             fnDecl->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(paramType),
                                                                  pname.line, pname.column));
-        } while (match(TokenType::COMMA));    }
+        } while (match(TokenType::COMMA));
+    }
     expect(TokenType::RPAREN, "expected )");
 
     // 返回类型（与变量声明统一）：

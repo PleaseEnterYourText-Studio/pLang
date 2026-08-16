@@ -459,11 +459,12 @@ struct FunctionDeclNode : ASTNode
     bool hasBody;
     bool isExtern;          // extern func：FFI 声明，不生成定义
     bool isPub;             // pub：跨包可见
+    bool isVariadic;        // 变参函数（extern ...）
     std::string packageName; // 所属包（如 "std.thread"），由解析器在合并/解析时标注
 
     FunctionDeclNode(const std::string& name, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::FUNCTION_DECL, line, column), name(name), hasBody(false),
-          isExtern(false), isPub(false) {}
+          isExtern(false), isPub(false), isVariadic(false) {}
 };
 
 // struct 声明
