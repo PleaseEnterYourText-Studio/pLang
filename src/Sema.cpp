@@ -891,6 +891,9 @@ bool Sema::isCompatible(const std::string& from, const std::string& to) const
 {
     if (from == to) return true;
 
+    // 字符串 → 指针衰减（printf("%s", s) 等）
+    if (from == "string" && to == "pointer") return true;
+
     // ptr 与 pointer 别名
     if ((from == "ptr" && to == "pointer") || (from == "pointer" && to == "ptr")) return true;
 

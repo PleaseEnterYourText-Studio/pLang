@@ -1,0 +1,154 @@
+package std.io;
+
+// PLang 标准库：标准输入输出。import std.io 后编译器解析本包源码并合并编译。
+// 输出全部由源码实现（数字→字符串自写转换，不依赖 libc 格式化的舍入差异）。
+
+// extern C 声明（LLVM declare，不生成定义）
+extern func puts(var -> var: ptr s) : int;
+extern func putchar(val: int c) : int;
+extern func getchar() : int;
+extern func printf(var -> var: ptr fmt, var -> var: ptr arg) : int;
+extern func scanf(var -> var: ptr fmt, var -> var: ptr arg) : int;
+extern func fgets(var -> var: ptr buf, val: int size, var -> var: ptr stream) -> var: ptr;
+extern func fflush(var -> var: ptr stream) : int;
+extern func fprintf(var -> var: ptr stream, var -> var: ptr fmt, var -> var: ptr arg) : int;
+
+// extern 全局数据：标准流句柄
+extern var stdin : ptr;
+extern var stdout : ptr;
+extern var stderr : ptr;
+
+
+// 输出字符串（不换行）
+pub func print(var -> var: ptr s) {
+    printf("%s", s);
+}
+
+// 输出字符串并换行
+pub func println(var -> var: ptr s) {
+    puts(s);
+}
+
+// 输出单个字符
+pub func printChar(val: char c) {
+    putchar(int as c);
+}
+
+// 输出到标准错误
+pub func error(var -> var: ptr s) {
+    fprintf(stderr, "%s", s);
+}
+
+// 冲刷输出缓冲
+pub func flush() {
+    fflush(stdout);
+}
+
+// 读取一个字符（EOF 返回 -1）
+pub func readChar() : int {
+    return getchar();
+}
+
+// 读取一个整数
+pub func readInt() : int {
+    var: int x = 0;
+    scanf("%d", &x);
+    return x;
+}
+
+// 读取一行到缓冲区（含换行），无 EOF 处理
+pub func readLine(var -> var: char buf, val: int size) {
+    fgets(buf, size, stdin);
+}
+
+// —— 数字格式化（源码实现，跨平台位级一致）——
+
+// 整数 → 十进制字符串写入 buf，返回字符串长度（不含结束符）
+func formatInt(val: int value, var -> var: char buf, val: int size) : int {
+    var: int i = 0;
+    var: int v = value;
+    var: bool neg = false;
+    if (v < 0) {
+        neg = true;
+        v = 0 - v;
+    }
+    // 逆序写入数字
+    if (v == 0) {
+        buf[i] = '0';
+        i = i + 1;
+    } else {
+        while (v > 0) {
+            buf[i] = '0' + v % 10;
+            v = v / 10;
+            i = i + 1;
+        }
+    }
+    // 原地反转
+    var: int j = 0;
+    while (j < i / 2) {
+        var: char tmp = buf[j];
+        buf[j] = buf[i - 1 - j];
+        buf[i - 1 - j] = tmp;
+        j = j + 1;
+    }
+    // 负数前缀
+    if (neg) {
+        var: int k = i;
+        while (k > 0) {
+            buf[k] = buf[k - 1];
+            k = k - 1;
+        }
+        buf[0] = '-';
+        i = i + 1;
+    }
+    buf[i] = char as 0;
+    return i;
+}
+
+// 浮点数 → 十进制字符串（保留 6 位小数）写入 buf，返回字符串长度
+func formatFloat(val: f64 value, var -> var: char buf, val: int size) : int {
+    var: f64 v = value;
+    var: bool neg = false;
+    if (v < 0.0) {
+        neg = true;
+        v = 0.0 - v;
+    }
+    var: int ip = int as v;
+    var: int len = formatInt(ip, buf, size);
+    var: f64 frac = v - int as ip;
+    buf[len] = '.';
+    len = len + 1;
+    var: int fracInt = int as (frac * 1000000.0 + 0.5); // 四舍五入，避免浮点表示误差丢位
+    var: int d = 100000;
+    while (d > 0) {
+        buf[len] = '0' + fracInt / d % 10;
+        d = d / 10;
+        len = len + 1;
+    }
+    // 负数前缀
+    if (neg) {
+        var: int k = len;
+        while (k > 0) {
+            buf[k] = buf[k - 1];
+            k = k - 1;
+        }
+        buf[0] = '-';
+        len = len + 1;
+    }
+    buf[len] = char as 0;
+    return len;
+}
+
+// 输出整数
+pub func printInt(val: int value) {
+    var: char[32] buf;
+    formatInt(value, &buf, 32);
+    printf("%s", &buf);
+}
+
+// 输出浮点数（保留 6 位小数）
+pub func printFloat(val: f64 value) {
+    var: char[64] buf;
+    formatFloat(value, &buf, 64);
+    printf("%s", &buf);
+}

@@ -487,3 +487,33 @@ for (var i = a[1...5 step 1]) {
 }
 ```
 默认步长为1.
+
+# 标准输入输出 (std.io)
+`std.io` 是真正的源码库，位于 `std/io/io.plang`：`import std.io;` 后编译器解析本包源码并合并编译。
+数字→字符串的格式化在源码内实现（不依赖 libc 的 printf 舍入，跨平台位级一致）。
+
+## 输出
+- `io.print(s)`: 输出字符串（不换行）, `s` 为字符串或字符缓冲指针.
+- `io.println(s)`: 输出字符串并换行.
+- `io.printChar(c)`: 输出单个字符.
+- `io.printInt(n)`: 输出整数.
+- `io.printFloat(f)`: 输出浮点数（保留 6 位小数）.
+- `io.error(s)`: 输出到标准错误.
+- `io.flush()`: 冲刷输出缓冲.
+
+## 输入
+- `io.readChar()`: 读取一个字符（EOF 返回 -1）.
+- `io.readInt()`: 读取一个整数.
+- `io.readLine(buf, size)`: 读取一行到缓冲区（含换行）.
+```plang
+import std.io;
+
+func main() : int {
+    io.println("请输入一个整数:");
+    var: int n = io.readInt();
+    io.print("你输入了: ");
+    io.printInt(n);
+    io.println("");
+    return 0;
+}
+```

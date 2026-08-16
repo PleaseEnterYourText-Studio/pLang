@@ -2,6 +2,7 @@ package demo;
 import std.vector;
 import std.string;
 import std.thread;
+import std.io;
 
 /* 块注释 */
 // 行注释
@@ -141,6 +142,18 @@ func main() : int {
     thread.destroy(m);
 
     thread.yield();
+
+    // 标准输入输出
+    io.println("请输入一个整数:");
+    var: int input = io.readInt();
+    io.print("你输入了: ");
+    io.printInt(input);
+    io.println("");
+    io.printFloat(3.14159);
+    io.println("");
+    io.printChar('!');
+    io.println("");
+    io.flush();
 
     return 82;
 }
