@@ -508,6 +508,8 @@ void CodeGenerator::generateStatement(ASTNode* node)
                 {
                     llvm::Value* initVal = generateExpression(decl->initializer.get());
                     if (initVal) {
+                        // 初始值按声明类型转换（如 i64 x = 0 须零扩展，否则高位是垃圾）
+                        initVal = coerceValue(initVal, varType);
                         builder.CreateStore(initVal, alloca, decl->isVolatile);
                     }
                 }
