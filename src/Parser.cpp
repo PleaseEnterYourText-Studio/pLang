@@ -834,7 +834,7 @@ std::unique_ptr<ASTNode> Parser::parseAssignment()
     {
         if (match(op))
         {
-            auto value = parseAssignment();
+            auto value = parseExpression(); // 走 parseExpression 以支持 RHS 上的类型转换
             if (op == TokenType::ASSIGN)
             {
                 return std::make_unique<AssignmentNode>(std::move(left), std::move(value), op,
@@ -1043,6 +1043,23 @@ std::unique_ptr<ASTNode> Parser::parseMultiplicative()
 
 std::unique_ptr<ASTNode> Parser::parseUnary()
 {
+    // 类型转换: TYPE as expr（作为操作数出现时，如 v - int as x）
+    if (check(TokenType::INT) || check(TokenType::I8) || check(TokenType::I16) ||
+        check(TokenType::I32) || check(TokenType::I64) || check(TokenType::U8) ||
+        check(TokenType::U16) || check(TokenType::U32) || check(TokenType::U64) ||
+        check(TokenType::UINT) || check(TokenType::F32) || check(TokenType::F64) ||
+        check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::BOOL))
+    {
+        if (peek(1).type == TokenType::AS)
+        {
+            std::string targetType = advance().text;
+            int line = previous().line;
+            int column = previous().column;
+            advance(); // 消费 as
+            auto value = parseExpression();
+            return std::make_unique<CastNode>(targetType, std::move(value), line, column);
+        }
+    }
     if (match(TokenType::NOT))
     {
         auto operand = parseUnary();
