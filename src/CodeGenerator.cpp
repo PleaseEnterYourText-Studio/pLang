@@ -89,7 +89,7 @@ llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
         return llvm::Type::getFloatTy(context);
     } else if (typeName == "f64") {
         return llvm::Type::getDoubleTy(context);
-    } else if (typeName == "string" || typeName == "pointer" || typeName == "ptr") {
+    } else if (typeName == "string" || typeName == "pointer" || typeName == "ptr" || typeName == "func") {
         return llvm::PointerType::get(context, 0);
     } else if (typeName == "void") {
         return llvm::Type::getVoidTy(context);
@@ -232,6 +232,10 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             if (auto* addr = dynamic_cast<AddressOfNode*>(node)) {
                 if (addr->operand->type == ASTNodeType::VARIABLE_REF) {
                     auto* ref = static_cast<VariableRefNode*>(addr->operand.get());
+                    // &函数名 —— 函数指针
+                    if (auto* fn = module->getFunction(ref->name)) {
+                        return fn;
+                    }
                     // &s.x / &a.b.c —— 结构体成员地址
                     size_t dot = ref->name.find('.');
                     if (dot != std::string::npos)
@@ -393,6 +397,22 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
             llvm::Function* func = module->getFunction(call->name);
             if (!func) {
+                // 间接调用：通过函数指针变量 cb(...)
+                auto it = namedValues.find(call->name);
+                if (it != namedValues.end() && it->second.type->isPointerTy())
+                {
+                    llvm::Value* fnPtr = builder.CreateLoad(it->second.type, it->second.ptr, call->name);
+                    std::vector<llvm::Type*> argTys;
+                    std::vector<llvm::Value*> args;
+                    for (auto& arg : call->arguments) {
+                        llvm::Value* v = generateExpression(arg.get());
+                        args.push_back(v);
+                        if (v) argTys.push_back(v->getType());
+                    }
+                    llvm::FunctionType* ft = llvm::FunctionType::get(
+                        llvm::Type::getVoidTy(context), argTys, false);
+                    return builder.CreateCall(ft, fnPtr, args); // void 返回不带名字
+                }
                 std::cerr << "Error: Function '" << call->name << "' not found" << std::endl;
                 return nullptr;
             }

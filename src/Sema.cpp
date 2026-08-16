@@ -491,9 +491,18 @@ std::string Sema::visitExpr(ASTNode* node)
         case ASTNodeType::BINARY_OP: return visitBinary(dynamic_cast<BinaryOpNode*>(node));
         case ASTNodeType::UNARY_OP:
         {
-            // 取地址 &a → pointer
+            // 取地址 &a → pointer；&函数名 → func（函数指针）
             if (auto* addr = dynamic_cast<AddressOfNode*>(node))
             {
+                if (addr->operand->type == ASTNodeType::VARIABLE_REF)
+                {
+                    auto* ref = dynamic_cast<VariableRefNode*>(addr->operand.get());
+                    auto fnSym = symbols.lookup(ref->name);
+                    if (fnSym && fnSym->kind == SymbolKind::FUNCTION)
+                    {
+                        return "func";
+                    }
+                }
                 visitExpr(addr->operand.get());
                 return "pointer";
             }
@@ -676,6 +685,18 @@ std::string Sema::visitCall(FunctionCallNode* node)
     {
         error(node->line, node->column, "call to undefined function '" + node->name + "'");
         return "";
+    }
+    // 间接调用：函数指针变量/参数 cb(...)
+    if (sym->kind == SymbolKind::VARIABLE || sym->kind == SymbolKind::PARAMETER)
+    {
+        bool isFuncPtr = sym->typeName == "func";
+        auto pe = pointerElementTypes.find(node->name);
+        if (pe != pointerElementTypes.end() && pe->second == "func") isFuncPtr = true;
+        if (isFuncPtr)
+        {
+            for (auto& a : node->arguments) visitExpr(a.get());
+            return ""; // v1：不跟踪签名，视为无返回
+        }
     }
     if (sym->kind != SymbolKind::FUNCTION)
     {
@@ -957,7 +978,7 @@ bool Sema::isBuiltinType(const std::string& type) const
 {
     return isNumericType(type) || type == "char" || type == "string" ||
            type == "bool" || type == "pointer" || type == "array" ||
-           type == "wchar" || type == "wstring" || type == "ptr";
+           type == "wchar" || type == "wstring" || type == "ptr" || type == "func";
 }
 
 bool Sema::isCompatible(const std::string& from, const std::string& to) const
@@ -967,8 +988,9 @@ bool Sema::isCompatible(const std::string& from, const std::string& to) const
     // 字符串 → 指针衰减（printf("%s", s) 等）
     if (from == "string" && to == "pointer") return true;
 
-    // ptr 与 pointer 别名
+    // ptr 与 pointer 别名；func（函数指针）与 pointer 兼容
     if ((from == "ptr" && to == "pointer") || (from == "pointer" && to == "ptr")) return true;
+    if ((from == "func" && to == "pointer") || (from == "pointer" && to == "func")) return true;
 
     // int/uint 别名
     if ((from == "int" && to == "i32") || (from == "i32" && to == "int")) return true;

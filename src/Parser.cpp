@@ -188,6 +188,7 @@ std::unique_ptr<TypeNode> Parser::parsePrimitiveType()
         case TokenType::F32: nodeType = ASTNodeType::TYPE_F32; break;
         case TokenType::F64: nodeType = ASTNodeType::TYPE_F64; break;
         case TokenType::CHAR: nodeType = ASTNodeType::TYPE_CHAR; break;
+        case TokenType::FUNC: nodeType = ASTNodeType::TYPE_PRIMITIVE; name = "func"; break;
         case TokenType::STRING_TYPE: nodeType = ASTNodeType::TYPE_STRING; break;
         case TokenType::BOOL: nodeType = ASTNodeType::TYPE_BOOL; break;
         case TokenType::THIS_TYPE: nodeType = ASTNodeType::TYPE_TYPE; break;
