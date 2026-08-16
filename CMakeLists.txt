@@ -97,6 +97,7 @@ add_executable(PLang
     src/SymbolTable.cpp
     src/CodeGenerator.cpp
     src/Importer.cpp
+    src/TypeSystem.cpp
 )
 
 # LSP 服务器
@@ -117,6 +118,7 @@ add_executable(lsp-server
     src/Sema.cpp
     src/SymbolTable.cpp
     src/Importer.cpp
+    src/TypeSystem.cpp
 )
 
 target_include_directories(lsp-server PRIVATE

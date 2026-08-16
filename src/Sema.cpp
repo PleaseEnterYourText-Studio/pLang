@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include "../include/Sema.h"
+#include "../include/TypeSystem.h"
 
 void Sema::error(int line, int column, const std::string& message)
 {
@@ -1447,46 +1448,13 @@ bool Sema::isBuiltinType(const std::string& type) const
 
 bool Sema::isCompatible(const std::string& from, const std::string& to) const
 {
-    if (from == to) return true;
-
-    // 字符串 → 指针衰减（printf("%s", s) 等）
-    if (from == "string" && to == "pointer") return true;
-
-    // ptr 与 pointer 别名；func（函数指针）与 pointer 兼容
-    if ((from == "ptr" && to == "pointer") || (from == "pointer" && to == "ptr")) return true;
-    if ((from == "func" && to == "pointer") || (from == "pointer" && to == "func")) return true;
-
-    // int/uint 别名
-    if ((from == "int" && to == "i32") || (from == "i32" && to == "int")) return true;
-    if ((from == "uint" && to == "u32") || (from == "u32" && to == "uint")) return true;
-
-    // 整数提升：小类型可安全赋给大类型
-    static const std::vector<std::string> intRank = {
-        "i8", "u8", "char", "i16", "u16", "int", "uint", "i32", "u32", "i64", "u64"
-    };
-    size_t rf = intRank.size(), rt = intRank.size();
-    for (size_t i = 0; i < intRank.size(); ++i)
-    {
-        if (intRank[i] == from) rf = i;
-        if (intRank[i] == to) rt = i;
-    }
-    if (rf < intRank.size() && rt < intRank.size() && rf < rt)
-    {
-        return true; // 整数拓宽允许
-    }
-
-    // 整数 → 浮点
-    if (to == "f32" || to == "f64")
-    {
-        if (rf < intRank.size()) return true;
-    }
-
-    return false;
+    // D1：类型对象化判断（等价/拓宽/衰减规则集中在 TypeSystem）
+    return TypeSystem::compatible(TypeSystem::fromName(from), TypeSystem::fromName(to));
 }
 
 bool Sema::isWidening(const std::string& from, const std::string& to) const
 {
-    // from 比 to 宽：窄化赋值，可能丢失精度
+    // 窄化赋值（from 比 to 宽），可能丢失精度
     if (from == "f64" && (to == "f32" || isNumericType(to) && to != "f64")) return true;
     if (from == "f32" && to != "f64" && isNumericType(to)) return true;
     if ((from == "i64" || from == "u64") && (to == "int" || to == "i32" || to == "uint" ||
