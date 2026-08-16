@@ -15,6 +15,7 @@
 | `std.option` | `import std.option;` | null 安全：`Option<T>` 泛型结构体 |
 | `std.result` | `import std.result;` | 错误处理：`Result<T, E>` 泛型结构体 |
 | `std.vector` | `import std.vector;` | 动态数组：`Vec<T>` 泛型容器，自动扩容 |
+| `std.sqlite` | `import std.sqlite;` | 数据库：SQLite 绑定，自动链接 -lsqlite3 |
 
 ---
 
@@ -380,3 +381,39 @@ func main() : int {
 
 > 泛型结构体方法暂不克隆，故以自由泛型函数 `vector.xxx<T>(&v, ...)` 形式提供；
 > `sizeof(T)` 用于按元素大小分配内存。
+
+---
+
+# std.sqlite 数据库
+
+SQLite 数据库绑定（extern FFI 直通 libc sqlite3，**自动链接 `-lsqlite3`**，无需手动配置）。
+
+| 函数 | 说明 |
+|------|------|
+| `sqlite.open(path)` | 打开/创建数据库文件，成功返回句柄，失败返回 `null` |
+| `sqlite.close(db)` | 关闭数据库 |
+| `sqlite.exec(db, sql)` | 执行无返回的 SQL（CREATE/INSERT/UPDATE/DELETE），0=成功 |
+| `sqlite.query(db, sql)` | 查询并逐行打印结果（列以 `\|` 分隔）；失败打印错误信息 |
+
+```plang
+import std.io;
+import std.sqlite;
+
+func main() : int {
+    var -> var: ptr db = sqlite.open("test.db");
+    if (db == null) { io.println("open failed"); return 1; }
+
+    sqlite.exec(db, "DROP TABLE IF EXISTS user");
+    sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT)");
+    sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice')");
+    sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob')");
+
+    sqlite.query(db, "SELECT * FROM user");   // 输出：1|Alice  2|Bob
+
+    sqlite.close(db);
+    return 0;
+}
+```
+
+> 内部使用 prepared statement（`sqlite3_prepare_v2`），`query` 以文本形式打印各列；
+> 后续可扩展按列取值 API（`columnInt`/`columnText`）。

@@ -1,7 +1,7 @@
 # PLang 语言文档
 
 > **实现状态**：本文为语言设计文档。已实现：指针/数组、结构体/联合/位域/对齐、泛型结构体与泛型函数、sizeof、RAII（construction/destroy）、
-> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector）。
+> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector/sqlite）。
 > 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、`std.string` 库、模板函数自动生成、`?` 错误传播。
 > 编译器：LLVM 优化（-O0~-O3）、DWARF 调试信息、错误恢复、独立编译单元、LSP（悬停/补全/跳转/重命名）。
 > 标准库通过 `import std.xxx` 独立编译为 `.o` 并与用户程序链接，见 `stdlib.md`。
@@ -401,6 +401,7 @@ extern var stdin : ptr;
 | `std.option` | null 安全 | `Option<T>` 泛型结构体：`{true, v}` 有值 / `{false, 0}` 无值 |
 | `std.result` | 错误处理 | `Result<T, E>` 泛型结构体：`{true, v, 0}` 成功 / `{false, 0, e}` 失败 |
 | `std.vector` | 动态数组 | `Vec<T>` 泛型容器：`vector.new/push/get/len/pop/destroy`，自动扩容 |
+| `std.sqlite` | 数据库 | SQLite 绑定：`sqlite.open/close/exec/query`，自动链接 -lsqlite3 |
 
 # 多线程 (std.thread)
 `std.thread` 是**真正的源码库**，位于 `std/thread/thread.plang`：`import std.thread;` 后编译器将该包独立编译为 `.o` 并与用户程序链接。
