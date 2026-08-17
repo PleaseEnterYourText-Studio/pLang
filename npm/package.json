@@ -1,5 +1,5 @@
 {
-  "name": "plang",
+  "name": "@peyt/plang",
   "displayName": "pLang",
   "description": "pLang compiler",
   "version": "0.0.1",
