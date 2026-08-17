@@ -536,7 +536,7 @@ int main(int argc, char* argv[]) {
     }
     
     if (inputFiles.empty()) {
-        std::cerr << "usage: plangc [options] <file.plang | directory>\n";
+        std::cerr << "usage: plc [options] <file.plang | directory>\n";
         std::cerr << "options:\n";
         std::cerr << "  -c              compile to object file only (.o)\n";
         std::cerr << "  -static         build static library (.a)\n";

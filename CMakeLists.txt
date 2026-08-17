@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(PLang LANGUAGES C CXX)
+project(plc LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -79,7 +79,7 @@ message(STATUS "   Include: ${LLVM_INCLUDE_DIRS}")
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
-add_executable(PLang
+add_executable(plc
     src/main.cpp
     src/main.plang
     include/main.h
@@ -126,7 +126,7 @@ target_include_directories(lsp-server PRIVATE
     ${LLVM_INCLUDE_DIRS}
 )
 
-target_include_directories(PLang PRIVATE
+target_include_directories(plc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${LLVM_INCLUDE_DIRS}
 )
@@ -150,25 +150,25 @@ else()
     )
 endif()
 
-target_link_libraries(PLang PRIVATE ${llvm_libs})
+target_link_libraries(plc PRIVATE ${llvm_libs})
 
 target_link_libraries(lsp-server PRIVATE ${llvm_libs})
 
 # 监控 .plang 源码：修改后自动验证语法
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/main.plang.stamp
-    COMMAND $<TARGET_FILE:PLang> ${CMAKE_CURRENT_SOURCE_DIR}/src/main.plang
+    COMMAND $<TARGET_FILE:plc> ${CMAKE_CURRENT_SOURCE_DIR}/src/main.plang
     COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/main.plang.stamp
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/main.plang
     COMMENT "Validating src/main.plang"
     VERBATIM
 )
 add_custom_target(validate_plang ALL
-    DEPENDS PLang ${CMAKE_CURRENT_BINARY_DIR}/main.plang.stamp
+    DEPENDS plc ${CMAKE_CURRENT_BINARY_DIR}/main.plang.stamp
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(PLang PRIVATE -Wno-unused-parameter -Wno-comment)
+    target_compile_options(plc PRIVATE -Wno-unused-parameter -Wno-comment)
 endif()
 
-message(STATUS "✅ PLang configured with LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "plc configured with LLVM ${LLVM_PACKAGE_VERSION}")
