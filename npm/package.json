@@ -1,15 +1,15 @@
 {
-  "name": "plang-compiler",
+  "name": "plang",
   "displayName": "pLang",
-  "description": "pLang compiler (plc): a C-like, Rust-like systems language compiler (LLVM backend)",
+  "description": "pLang compiler",
   "version": "0.0.0",
-  "license": "ISC",
+  "license": "AGPL-3.0",
   "author": "PeYT",
   "contributors": ["ieshishinjin", "Carry-Rao", "MaherJon"],
-  "homepage": "https://github.com/PeYT/pLang",
+  "homepage": "https://github.com/PleaseEnterYourText-Studio/pLang",
   "repository": {
     "type": "git",
-    "url": "https://github.com/PeYT/pLang.git"
+    "url": "https://github.com/PleaseEnterYourText-Studio/pLang.git"
   },
   "keywords": ["plang", "plc", "compiler", "language", "llvm"],
   "bin": {
