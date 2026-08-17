@@ -1,5 +1,3 @@
-// 构建 npm 包：从 cmake-build-debug 收集产物到 npm/ 目录
-// 用法：node scripts/build-package.js [buildDir]
 'use strict';
 
 const fs = require('fs');
