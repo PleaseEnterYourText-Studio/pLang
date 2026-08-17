@@ -123,6 +123,16 @@ void LspServer::analyzeDocument(DocumentState& doc)
     // 即使语法错误，也尽量收集已解析的部分符号（保证高亮不退化）
     if (doc.program)
     {
+        // 记录导入的包（io. 补全上下文用）
+        doc.importedModules.clear();
+        for (auto& imp : doc.program->imports)
+        {
+            if (imp->type == ASTNodeType::IMPORT_STMT)
+            {
+                auto* importNode = dynamic_cast<ImportStmtNode*>(imp.get());
+                doc.importedModules.insert(importNode->path);
+            }
+        }
         // 解析 import：合并标准库声明（编辑器内库函数可用）
         size_t ownDeclCount = doc.program->decls.size();
         bool importError = false;
@@ -138,6 +148,11 @@ void LspServer::analyzeDocument(DocumentState& doc)
         for (size_t i = 0; i < ownDeclCount; ++i)
         {
             collectSymbols(doc, doc.program->decls[i].get());
+        }
+        // 标准库合并的符号：用于包成员补全（io. → io.println 等），标记 packageName
+        for (size_t i = ownDeclCount; i < doc.program->decls.size(); ++i)
+        {
+            collectStdlibSymbols(doc, doc.program->decls[i].get());
         }
         doc.parsed = true;
     }
@@ -319,6 +334,44 @@ void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
     }
 }
 
+// 标准库符号收集（合并进 doc.symbols，供包成员补全 io. → io.println 等）
+void LspServer::collectStdlibSymbols(DocumentState& doc, ASTNode* node)
+{
+    if (!node) return;
+    switch (node->type)
+    {
+        case ASTNodeType::FUNCTION_DECL:
+        {
+            auto* fn = static_cast<FunctionDeclNode*>(node);
+            SymbolInfo info;
+            info.name = fn->name;   // 本名（println），补全时拼 io.println
+            info.uri = doc.uri;
+            info.range = {{fn->line - 1, fn->column - 1},
+                          {fn->line - 1, fn->column - 1 + (int)fn->name.size()}};
+            info.selectionRange = info.range;
+            info.kind = "function";
+            info.packageName = fn->packageName;
+            doc.symbols.push_back(info);
+            break;
+        }
+        case ASTNodeType::STRUCT_DECL:
+        {
+            auto* st = static_cast<StructDeclNode*>(node);
+            SymbolInfo info;
+            info.name = st->name;
+            info.uri = doc.uri;
+            info.range = {{st->line - 1, st->column - 1},
+                          {st->line - 1, st->column - 1 + (int)st->name.size()}};
+            info.selectionRange = info.range;
+            info.kind = "type";
+            doc.symbols.push_back(info);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 void LspServer::openDocument(const std::string& uri, const std::string& text)
 {
     auto doc = std::make_shared<DocumentState>();
@@ -475,7 +528,6 @@ llvm::json::Value LspServer::getCompletion(const std::string& uri, int line, int
     auto it = documents.find(uri);
     if (it == documents.end()) return nullptr;
     DocumentState& doc = *it->second;
-
     // 当前行与前缀
     std::string lineText;
     std::istringstream stream(doc.text);
@@ -489,13 +541,35 @@ llvm::json::Value LspServer::getCompletion(const std::string& uri, int line, int
     while (start > 0 && (std::isalnum(lineText[start - 1]) || lineText[start - 1] == '_')) start--;
     std::string prefix = lineText.substr(start, character - start);
 
+    // 点号上下文：io. → 只补 io 包成员；mem. → mem 包成员
+    std::string memberPrefix;
+    size_t dotPos = lineText.rfind('.', start);
+    if (dotPos != std::string::npos)
+    {
+        // 取 "." 前的包别名（io / mem / thread / ...），"." 后到光标的文字是输入中的成员名
+        std::string before = lineText.substr(0, dotPos);
+        size_t last = before.find_last_of(" \t(");
+        std::string pkgName = (last == std::string::npos) ? before : before.substr(last + 1);
+        bool isPackageAlias = false;
+        for (const auto& imp : doc.importedModules)
+        {
+            std::string alias = imp.substr(imp.rfind('.') + 1);
+            if (alias == pkgName) { isPackageAlias = true; break; }
+        }
+        if (isPackageAlias)
+        {
+            memberPrefix = pkgName + ".";
+        }
+    }
+
     llvm::json::Array items;
-    // 符号补全（本文件 + 合并的标准库）
+    // 符号补全（本文件 + 合并的标准库）；点号上下文下只补该包成员
     for (const auto& sym : doc.symbols)
     {
-        if (prefix.empty() || sym.name.rfind(prefix, 0) == 0)
+        if (memberPrefix.empty())
         {
-            int lspKind = 6; // function
+            if (!(prefix.empty() || sym.name.rfind(prefix, 0) == 0)) continue;
+            int lspKind = 3; // function
             if (sym.kind == "variable" || sym.kind == "parameter") lspKind = 6;
             else if (sym.kind == "type" || sym.kind == "struct") lspKind = 7;
             items.push_back(llvm::json::Object{
@@ -504,22 +578,40 @@ llvm::json::Value LspServer::getCompletion(const std::string& uri, int line, int
                 {"detail", sym.kind},
             });
         }
-    }
-    // 关键字补全
-    static const std::vector<std::string> keywords = {
-        "func", "var", "val", "if", "else", "while", "for", "return",
-        "struct", "using", "import", "package", "pub", "switch", "case",
-        "goto", "label", "thread", "io", "mem", "atomic", "null", "as"
-    };
-    for (const auto& kw : keywords)
-    {
-        if (prefix.empty() || kw.rfind(prefix, 0) == 0)
+        else
         {
+            // 包成员：符号的 packageName 与输入的包别名匹配（std.io → io）
+            if (sym.packageName.empty()) continue;
+            std::string pkgAlias = memberPrefix.substr(0, memberPrefix.size() - 1);
+            std::string symAlias = sym.packageName.substr(sym.packageName.rfind('.') + 1);
+            if (symAlias != pkgAlias) continue;
+            if (!prefix.empty() && sym.name.rfind(prefix, 0) != 0) continue;
             items.push_back(llvm::json::Object{
-                {"label", kw},
-                {"kind", 14}, // keyword
-                {"detail", "keyword"},
+                {"label", sym.name},
+                {"kind", 3},
+                {"detail", "std." + symAlias},
             });
+        }
+    }
+    // 关键字补全（点号上下文下不显示关键字）
+    if (memberPrefix.empty())
+    {
+        static const std::vector<std::string> keywords = {
+            "func", "var", "val", "if", "else", "while", "for", "return",
+            "struct", "using", "import", "package", "pub", "switch", "case",
+            "goto", "label", "sizeof", "union", "align", "volatile", "extern",
+            "null", "as", "true", "false", "thread", "io", "mem", "atomic"
+        };
+        for (const auto& kw : keywords)
+        {
+            if (prefix.empty() || kw.rfind(prefix, 0) == 0)
+            {
+                items.push_back(llvm::json::Object{
+                    {"label", kw},
+                    {"kind", 14}, // keyword
+                    {"detail", "keyword"},
+                });
+            }
         }
     }
     return llvm::json::Object{

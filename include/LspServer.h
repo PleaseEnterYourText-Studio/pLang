@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <set>
 #include <unordered_map>
 #include "llvm/Support/JSON.h"
 #include "AST.h"
@@ -30,6 +31,7 @@ struct SymbolInfo {
     LspRange selectionRange;
     std::string kind;   // function / variable / parameter / type / struct
     std::string typeName;   // 类型（悬停显示用）
+    std::string packageName;  // 所属包（std.io 等；空=本文件）
 };
 
 // 文档状态
@@ -40,6 +42,7 @@ struct DocumentState {
     std::vector<SemaError> errors;
     std::vector<SemaWarning> warnings;
     std::vector<SymbolInfo> symbols;
+    std::set<std::string> importedModules;   // 已导入的包（如 std.io）
     bool parsed;
 
     DocumentState() : parsed(false) {}
@@ -69,6 +72,7 @@ private:
     void closeDocument(const std::string& uri);
     void analyzeDocument(DocumentState& doc);
     void collectSymbols(DocumentState& doc, ASTNode* node);
+    void collectStdlibSymbols(DocumentState& doc, ASTNode* node);   // 标准库符号（包成员补全用）
 
     // LSP 方法
     llvm::json::Object initialize(const llvm::json::Value& params);
