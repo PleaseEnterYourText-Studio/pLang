@@ -6,6 +6,14 @@
 #include <memory>
 #include <cstdlib>
 #include <algorithm>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <limits.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
 #include <set>
 #include <filesystem>
 #include "Lexer.h"
@@ -114,21 +122,52 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
 
 // 标准库根目录
 // import std.thread 对应目录 <root>/std/thread，故 root 为包层级根（仓库根）。
+// 真实可执行文件路径（跨平台，兼容软链/PATH 调用）
+// macOS: _NSGetExecutablePath；Linux: /proc/self/exe；Windows: GetModuleFileName
+std::string getExecutablePath()
+{
+#if defined(__APPLE__)
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0)
+    {
+        char real[4096];
+        if (realpath(buf, real) != nullptr) return std::string(real);
+        return std::string(buf);
+    }
+#elif defined(__linux__)
+    char buf[4096];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0)
+    {
+        buf[n] = '\0';
+        return std::string(buf);
+    }
+#elif defined(_WIN32)
+    char buf[4096];
+    DWORD n = GetModuleFileNameA(nullptr, buf, sizeof(buf));
+    if (n > 0) return std::string(buf, n);
+#endif
+    return "";
+}
+
 std::string getStdlibRoot(const std::string& exePath)
 {
     if (const char* env = std::getenv("PLANG_STD"))
     {
         return env;
     }
-    // 默认：可执行文件所在目录的上一级（build/PLang → 仓库根）；规范化路径以兼容相对 argv[0]
+    // 用真实可执行文件路径（软链/PATH 调用也能定位到包内 std/）
+    std::string exe = getExecutablePath();
+    if (exe.empty()) exe = exePath;
     fs::path exeAbs;
     try
     {
-        exeAbs = fs::canonical(fs::path(exePath));
+        exeAbs = fs::canonical(fs::path(exe));
     }
     catch (...)
     {
-        exeAbs = fs::absolute(fs::path(exePath));
+        exeAbs = fs::absolute(fs::path(exe));
     }
     fs::path exeDir = exeAbs.parent_path();
     return exeDir.parent_path().string();
