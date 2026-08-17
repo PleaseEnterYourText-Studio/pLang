@@ -3,7 +3,7 @@
 ## 安装
 
 ```bash
-npm install -g @peyt/plang
+npm i -g --allow-scripts=@peyt/plang @peyt/plang
 ```
 
 安装需要你机器上有 **LLVM**：
