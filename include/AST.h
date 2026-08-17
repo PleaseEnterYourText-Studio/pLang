@@ -537,10 +537,10 @@ struct ImplDeclNode : ASTNode
         : ASTNode(ASTNodeType::IMPL_DECL, line, column), target(target) {}
 };
 
-// ==================== 以下节点结构来自 main 分支 (81fd524) ====================
+// 以下节点结构来自 main 分支 (81fd524)
 // 作为后续功能实现的设计参考，构造函数已补全内联实现
 
-// ===== do-while 语句 =====
+// do-while 语句
 struct DoWhileStmtNode : ASTNode
 {
     std::unique_ptr<ASTNode> condition;
@@ -550,7 +550,7 @@ struct DoWhileStmtNode : ASTNode
         : ASTNode(ASTNodeType::WHILE_STMT, line, column), condition(std::move(condition)), body(std::move(body)) {}
 };
 
-// ===== 成员访问 =====
+// 成员访问
 struct MemberAccessNode : ASTNode
 {
     std::unique_ptr<ASTNode> object;
@@ -561,7 +561,7 @@ struct MemberAccessNode : ASTNode
         : ASTNode(ASTNodeType::VARIABLE_REF, line, column), object(std::move(object)), member(member), isMethodCall(isMethodCall) {}
 };
 
-// ===== 解引用 =====
+// 解引用
 struct DerefNode : ASTNode
 {
     std::unique_ptr<ASTNode> operand;
@@ -570,7 +570,7 @@ struct DerefNode : ASTNode
         : ASTNode(ASTNodeType::UNARY_OP, line, column), operand(std::move(operand)) {}
 };
 
-// ===== 引用类型 =====
+// 引用类型
 struct ReferenceTypeNode : TypeNode
 {
     bool isMutable;
@@ -579,7 +579,7 @@ struct ReferenceTypeNode : TypeNode
         : TypeNode(ASTNodeType::TYPE_REFERENCE, "", line, column, 0, std::move(inner)), isMutable(isMutable) {}
 };
 
-// ===== 模板参数 =====
+// 模板参数
 struct TemplateParamNode : ASTNode
 {
     std::string name;
@@ -589,7 +589,7 @@ struct TemplateParamNode : ASTNode
         : ASTNode(ASTNodeType::TYPE_PARAM, line, column), name(name), isTypeParam(isTypeParam) {}
 };
 
-// ===== 模板声明 =====
+// 模板声明
 struct TemplateDeclNode : ASTNode
 {
     std::vector<std::unique_ptr<TemplateParamNode>> params;
@@ -599,14 +599,14 @@ struct TemplateDeclNode : ASTNode
         : ASTNode(ASTNodeType::TEMPLATE_DECL, line, column), params(std::move(params)), body(std::move(body)) {}
 };
 
-// ===== this 引用 =====
+// this 引用
 struct ThisRefNode : ASTNode
 {
     ThisRefNode(int line = 0, int column = 0)
         : ASTNode(ASTNodeType::THIS_REF, line, column) {}
 };
 
-// ===== 类型转换 =====
+// 类型转换
 struct CastExprNode : ASTNode
 {
     std::unique_ptr<ASTNode> expr;
@@ -616,7 +616,7 @@ struct CastExprNode : ASTNode
         : ASTNode(ASTNodeType::CAST_EXPR, line, column), expr(std::move(expr)), targetType(std::move(targetType)) {}
 };
 
-// ===== sizeof 表达式 =====
+// sizeof 表达式
 struct SizeofExprNode : ASTNode
 {
     std::unique_ptr<TypeNode> targetType;
@@ -625,7 +625,7 @@ struct SizeofExprNode : ASTNode
         : ASTNode(ASTNodeType::SIZEOF_EXPR, line, column), targetType(std::move(targetType)) {}
 };
 
-// ===== 内联汇编 asm{} =====
+// 内联汇编 asm{}
 struct AsmOperand
 {
     std::string constraint;    // 如 "r", "=r"

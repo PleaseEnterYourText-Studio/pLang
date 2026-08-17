@@ -21,7 +21,7 @@ static std::string jsonToString(const llvm::json::Value& v)
     return s;
 }
 
-// ============ 消息读写（stdio 上的 Content-Length 帧） ============
+// 消息读写（stdio 上的 Content-Length 帧）
 
 std::string LspServer::readMessage()
 {
@@ -80,7 +80,7 @@ llvm::json::Value LspServer::makeError(int code, const std::string& message)
     return llvm::json::Value(std::move(err));
 }
 
-// ============ 文档管理 ============
+// 文档管理
 
 LspPosition LspServer::offsetToPosition(const DocumentState& doc, int offset) const
 {
@@ -414,7 +414,7 @@ void LspServer::closeDocument(const std::string& uri)
     documents.erase(uri);
 }
 
-// ============ LSP 方法 ============
+// LSP 方法
 
 llvm::json::Object LspServer::initialize(const llvm::json::Value& params)
 {
@@ -820,7 +820,7 @@ llvm::json::Value LspServer::getDiagnostics(const std::string& uri)
     return llvm::json::Value(std::move(result));
 }
 
-// ============ 请求分发 ============
+// 请求分发
 
 llvm::json::Value LspServer::handleRequest(const std::string& method, const llvm::json::Value& params)
 {
@@ -940,7 +940,7 @@ void LspServer::handleNotification(const std::string& method, const llvm::json::
     }
 }
 
-// ============ 主循环 ============
+// 主循环
 
 void LspServer::run()
 {

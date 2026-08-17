@@ -450,7 +450,7 @@ void Sema::visitStmt(ASTNode* node)
     }
 }
 
-// ===== 泛型实例化 =====
+// 泛型实例化
 
 std::unique_ptr<TypeNode> Sema::substituteType(TypeNode* t,
     const std::vector<std::string>& params, const std::vector<std::string>& args)
@@ -1526,7 +1526,7 @@ std::string Sema::visitThreadCall(FunctionCallNode* node)
     return "";
 }
 
-// ===== std.atomic 编译器内置 =====
+// std.atomic 编译器内置
 
 std::string Sema::visitAtomicCall(FunctionCallNode* node)
 {

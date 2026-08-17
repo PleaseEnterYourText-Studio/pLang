@@ -18,7 +18,7 @@
 
 namespace fs = std::filesystem;
 
-// ===== 工具函数（保持不变） =====
+// 工具函数（保持不变）
 std::string getLine(const std::string& source, int line) {
     std::istringstream stream(source);
     std::string lineText;
@@ -59,7 +59,7 @@ std::string withExtension(const std::string& path, const std::string& newExt) {
     return p.replace_extension(newExt).string();
 }
 
-// ===== 收集 .plang 文件 =====
+// 收集 .plang 文件
 std::vector<std::string> collectPlangFiles(const std::vector<std::string>& inputs) {
     std::vector<std::string> files;
     
@@ -78,7 +78,7 @@ std::vector<std::string> collectPlangFiles(const std::vector<std::string>& input
     return files;
 }
 
-// ===== 链接可执行文件 =====
+// 链接可执行文件
 bool linkExecutable(const std::vector<std::string>& objFiles, const std::string& exePath, bool needSqlite) {
     if (objFiles.empty()) {
         std::cerr << "error: no object files to link\n";
@@ -477,7 +477,7 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
     return true;
 }
 
-// ===== 打包静态库 =====
+// 打包静态库
 bool buildStaticLibrary(const std::vector<std::string>& objFiles, 
                         const std::string& outputName) {
     if (objFiles.empty()) {
@@ -505,7 +505,7 @@ bool buildStaticLibrary(const std::vector<std::string>& objFiles,
     return std::system(cmd.c_str()) == 0;
 }
 
-// ===== main 函数 =====
+// main 函数
 int main(int argc, char* argv[]) {
     bool compileOnly = false;
     bool buildStatic = false;
