@@ -590,21 +590,15 @@ int main(int argc, char* argv[]) {
         }
         return success ? 0 : 1;
     } else {
-        // 默认：链接成可执行文件（单文件时默认输出名 = 源文件去扩展名）
+        // 默认：链接成可执行文件（默认输出名 = 第一个源文件去扩展名）
         std::string exeName = outputName;
         if (exeName.empty())
         {
-            if (sources.size() == 1)
-            {
-                // 默认输出：源文件所在目录下的同名文件（main.plang → main）
-                exeName = fs::path(sources[0]).parent_path().empty()
-                    ? fs::path(sources[0]).stem().string()
-                    : (fs::path(sources[0]).parent_path() / fs::path(sources[0]).stem()).string();
-            }
-            else
-            {
-                exeName = "a.out";
-            }
+            // 输出到第一个源文件所在目录（main.plang → main）
+            const std::string& first = sources[0];
+            exeName = fs::path(first).parent_path().empty()
+                ? fs::path(first).stem().string()
+                : (fs::path(first).parent_path() / fs::path(first).stem()).string();
         }
         bool success = linkExecutable(objFiles, exeName, needSqlite);
         
