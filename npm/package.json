@@ -2,7 +2,7 @@
   "name": "plang",
   "displayName": "pLang",
   "description": "pLang compiler",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "license": "AGPL-3.0",
   "author": "PeYT",
   "contributors": ["ieshishinjin", "Carry-Rao", "MaherJon"],
