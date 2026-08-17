@@ -342,7 +342,32 @@ void Lexer::scanChar()
     advance();
     column++;
 
-    std::string text = source.substr(start, pos - start - 1);
+    std::string raw = source.substr(start, pos - start - 1);
+    // 转义处理（与字符串一致）：\n \t \r \\ \" \0 \'
+    std::string text;
+    text.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        if (raw[i] == '\\' && i + 1 < raw.size())
+        {
+            char c = raw[++i];
+            switch (c)
+            {
+                case 'n': text += '\n'; break;
+                case 't': text += '\t'; break;
+                case 'r': text += '\r'; break;
+                case '\\': text += '\\'; break;
+                case '"': text += '"'; break;
+                case '\'': text += '\''; break;
+                case '0': text += '\0'; break;
+                default: text += c; break;
+            }
+        }
+        else
+        {
+            text += raw[i];
+        }
+    }
     tokens.emplace_back(TokenType::CHAR_LIT, text, line, col);
 }
 

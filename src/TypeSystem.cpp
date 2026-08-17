@@ -117,8 +117,9 @@ bool TypeSystem::compatible(const std::shared_ptr<TypeInfo>& from, const std::sh
     if (!from || !to) return false;
     if (equal(from, to)) return true;
 
-    // 字符串 → 指针衰减
-    if (from->name == "string" && to->kind == TypeInfo::POINTER) return true;
+    // 字符串 ↔ 指针：字符串与 char* 可互赋（string.cat 返回 pointer 可赋给 string）
+    if ((from->name == "string" && to->kind == TypeInfo::POINTER) ||
+        (from->kind == TypeInfo::POINTER && to->name == "string")) return true;
 
     // func（函数指针）与 pointer 兼容
     if ((from->kind == TypeInfo::FUNC && to->kind == TypeInfo::POINTER) ||

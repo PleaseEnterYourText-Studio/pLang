@@ -315,11 +315,11 @@ std::unique_ptr<ASTNode> Parser::parseDeclaration()
 
 std::unique_ptr<ASTNode> Parser::parsePackage()
 {
-    Token name = expect(TokenType::IDENT, "expected package name");
+    Token name = expectPathSegment("expected package name");
     std::string pkgName = name.text;
     while (match(TokenType::DOT))
     {
-        pkgName += "." + expect(TokenType::IDENT, "expected package path segment").text;
+        pkgName += "." + expectPathSegment("expected package path segment").text;
     }
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<PackageStmtNode>(pkgName, name.line, name.column);
@@ -1472,9 +1472,15 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
         expect(TokenType::RPAREN, "expected ) to close sizeof");
         return std::make_unique<SizeofExprNode>(std::move(ty), previous().line, previous().column);
     }
-    if (match(TokenType::IDENT))
+    // 标识符（含类型关键字如 string.len 的 string）
+    if (check(TokenType::IDENT) || check(TokenType::INT) || check(TokenType::CHAR) ||
+        check(TokenType::STRING_TYPE) || check(TokenType::BOOL) ||
+        check(TokenType::I8) || check(TokenType::I16) || check(TokenType::I32) || check(TokenType::I64) ||
+        check(TokenType::U8) || check(TokenType::U16) || check(TokenType::U32) || check(TokenType::U64) ||
+        check(TokenType::UINT) || check(TokenType::F32) || check(TokenType::F64))
     {
-        std::string name = previous().text;
+        Token idTok = advance();
+        std::string name = idTok.text;
         // 泛型函数调用 foo<T1,T2>(...)：IDENT 后紧跟 < 时尝试解析泛型实参（失败则回退为普通标识符）
         if (check(TokenType::LT))
         {

@@ -1,0 +1,51 @@
+package std.string;
+import std.mem;
+
+// PLang 标准库：字符串操作（char* 字符串，\0 结尾）。
+// 用法：
+//   var: string s = "hello";
+//   var: int n = str.len(s);          // 5
+//   var: string t = str.cat(s, "!");  // "hello!"（堆上新字符串，用完 free）
+//   if (str.eq(s, "hello")) { ... }
+//   var: int c = str.cmp(a, b);       // 字典序比较
+//   var: string d = str.dup(s);       // 复制（堆上新字符串）
+// str.cat/str.dup 返回堆内存，调用方需 mem.free 释放。
+
+// extern C 声明（LLVM declare，不生成定义）；memcpy 复用 std.mem 的
+extern func strlen(var -> var: ptr s) : i64;
+extern func strcmp(var -> var: ptr a, var -> var: ptr b) : int;
+
+// 字符串长度（不含末尾 \0）
+pub func len(var -> var: ptr s) : int {
+    var: i64 n = strlen(s);
+    return int as n;
+}
+
+// 拼接 a + b，返回新分配的堆字符串（调用方 free）
+pub func cat(var -> var: ptr a, var -> var: ptr b) -> var: ptr {
+    var: i64 la = strlen(a);
+    var: i64 lb = strlen(b);
+    var -> var: char m = mem.malloc(la + lb + 1);
+    mem.memcpy(m, a, la);
+    mem.memcpy(m + la, b, lb);
+    m[la + lb] = '\0';
+    return m;
+}
+
+// 复制字符串，返回新分配的堆字符串（调用方 free）
+pub func dup(var -> var: ptr s) -> var: ptr {
+    var: i64 n = strlen(s);
+    var -> var: ptr m = mem.malloc(n + 1);
+    mem.memcpy(m, s, n + 1);   // 连末尾 \0 一起复制
+    return m;
+}
+
+// 内容相等比较（非指针比较）
+pub func eq(var -> var: ptr a, var -> var: ptr b) : bool {
+    return strcmp(a, b) == 0;
+}
+
+// 字典序比较：<0 / 0 / >0
+pub func cmp(var -> var: ptr a, var -> var: ptr b) : int {
+    return strcmp(a, b);
+}
