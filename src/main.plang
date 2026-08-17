@@ -202,14 +202,36 @@ func main() : int {
     io.println("");
     vector.destroy<int>(&v);
 
-    // SQLite：建表、插入、查询
+    // 字符串：长度 / 拼接 / 比较 / 复制
+    var: string hello = "hello";
+    var: string greeting = string.cat(hello, " world!");
+    io.println(greeting);                 // hello world!
+    if (string.eq(hello, "hello")) {
+        io.println("str eq ok");
+    }
+    mem.free(greeting);
+
+    // SQLite：建表、插入、按列取值（数据读进变量计算）
     var -> var: ptr db = sqlite.open("plang_demo.db");
     if (db != null) {
         sqlite.exec(db, "DROP TABLE IF EXISTS user");
-        sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT)");
-        sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice')");
-        sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob')");
-        sqlite.query(db, "SELECT * FROM user");   // 1|Alice  2|Bob
+        sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT, score INT)");
+        sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice', 90)");
+        sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob', 75)");
+        var -> var: ptr stmt = sqlite.prepare(db, "SELECT id, name, score FROM user");
+        var: int total = 0;
+        var: int n = 0;
+        while (sqlite.step(stmt)) {
+            io.printInt(sqlite.columnInt(stmt, 0));
+            io.print(": ");
+            io.println(sqlite.columnText(stmt, 1));
+            total = total + sqlite.columnInt(stmt, 2);
+            n = n + 1;
+        }
+        io.print("平均分=");
+        io.printInt(total / n);           // 165 / 2 = 82
+        io.println("");
+        sqlite.finalize(stmt);
         sqlite.close(db);
     }
 
