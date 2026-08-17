@@ -370,6 +370,10 @@ llvm::json::Object LspServer::initialize(const llvm::json::Value& params)
     capabilities["definitionProvider"] = true;
     capabilities["documentSymbolProvider"] = true;
     capabilities["renameProvider"] = true;
+    capabilities["hoverProvider"] = true;
+    capabilities["completionProvider"] = llvm::json::Object{
+        {"triggerCharacters", llvm::json::Array{"."}},
+    };
     capabilities["semanticTokensProvider"] = llvm::json::Object{
         {"legend", llvm::json::Object{
             {"tokenTypes", llvm::json::Array{"keyword", "type", "namespace", "function",
