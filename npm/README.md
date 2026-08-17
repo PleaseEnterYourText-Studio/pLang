@@ -1,7 +1,7 @@
 # pLang Compiler (plc)
 
 **pLang** — a systems programming language that is low-level like C and high-level like Rust.
-This package installs the `plc` compiler and the `plang-lsp` language server.
+This package installs the `plc` compiler and its standard library.
 
 Developed by the **PeYT** organization.
 Contributors: **ieshishinjin**, **Carry-Rao**, **MaherJon**.
@@ -46,7 +46,7 @@ are compiled and linked automatically. `import std.sqlite` links `-lsqlite3` aut
 
 ## Language Server
 
-`plang-lsp` is the LSP server (used by the VS Code extension / Neovim / Helix).
+The LSP server (`lsp-server`) is built separately from the pLang project and is used by the VS Code extension / Neovim / Helix.
 
 ## License
 

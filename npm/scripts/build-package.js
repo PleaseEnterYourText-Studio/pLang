@@ -18,10 +18,9 @@ function cp(src, dst) {
   console.log('[build] ' + path.basename(src) + ' -> ' + path.relative(root, dst));
 }
 
-// plc / lsp-server 可执行文件
+// plc 可执行文件
 const isWin = process.platform === 'win32';
 cp(path.join(buildDir, isWin ? 'plc.exe' : 'plc'), path.join(root, 'bin', isWin ? 'plc.exe' : 'plc'));
-cp(path.join(buildDir, isWin ? 'lsp-server.exe' : 'lsp-server'), path.join(root, 'bin', isWin ? 'lsp-server.exe' : 'lsp-server'));
 
 // 标准库源码
 const stdSrc = path.join(root, '..', 'std');

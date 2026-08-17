@@ -13,8 +13,7 @@
   },
   "keywords": ["plang", "plc", "compiler", "language", "llvm"],
   "bin": {
-    "plc": "./bin/plc",
-    "plang-lsp": "./bin/lsp-server"
+    "plc": "./bin/plc"
   },
   "files": ["bin", "lib", "std", "postinstall.js", "README.md"],
   "scripts": {
