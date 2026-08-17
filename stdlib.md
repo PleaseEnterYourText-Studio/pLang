@@ -15,6 +15,7 @@
 | `std.option` | `import std.option;` | null 安全：`Option<T>` 泛型结构体 |
 | `std.result` | `import std.result;` | 错误处理：`Result<T, E>` 泛型结构体 |
 | `std.vector` | `import std.vector;` | 动态数组：`Vec<T>` 泛型容器，自动扩容 |
+| `std.string` | `import std.string;` | 字符串操作：len/cat/dup/eq/cmp |
 | `std.sqlite` | `import std.sqlite;` | 数据库：SQLite 绑定，自动链接 -lsqlite3 |
 
 ---
@@ -394,6 +395,13 @@ SQLite 数据库绑定（extern FFI 直通 libc sqlite3，**自动链接 `-lsqli
 | `sqlite.close(db)` | 关闭数据库 |
 | `sqlite.exec(db, sql)` | 执行无返回的 SQL（CREATE/INSERT/UPDATE/DELETE），0=成功 |
 | `sqlite.query(db, sql)` | 查询并逐行打印结果（列以 `\|` 分隔）；失败打印错误信息 |
+| `sqlite.prepare(db, sql)` | 准备一条 SQL，返回语句句柄（失败返回 `null`） |
+| `sqlite.step(stmt)` | 推进一行；`true`=有数据行，`false`=结束/出错 |
+| `sqlite.columnCount(stmt)` | 当前行列数 |
+| `sqlite.columnInt(stmt, col)` | 取当前行第 `col` 列为整数 |
+| `sqlite.columnText(stmt, col)` | 取当前行第 `col` 列为字符串（指向 sqlite 内部缓冲） |
+| `sqlite.finalize(stmt)` | 释放语句 |
+| `sqlite.errmsg(db)` | 最近一次错误的描述信息 |
 
 ```plang
 import std.io;
@@ -404,16 +412,63 @@ func main() : int {
     if (db == null) { io.println("open failed"); return 1; }
 
     sqlite.exec(db, "DROP TABLE IF EXISTS user");
-    sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT)");
-    sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice')");
-    sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob')");
+    sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT, score INT)");
+    sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice', 90)");
+    sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob', 75)");
 
-    sqlite.query(db, "SELECT * FROM user");   // 输出：1|Alice  2|Bob
-
+    // 按列取值：数据读进变量做计算
+    var -> var: ptr stmt = sqlite.prepare(db, "SELECT id, name, score FROM user");
+    var: int total = 0;
+    var: int n = 0;
+    while (sqlite.step(stmt)) {
+        io.printInt(sqlite.columnInt(stmt, 0));
+        io.print(": ");
+        io.println(sqlite.columnText(stmt, 1));
+        total = total + sqlite.columnInt(stmt, 2);
+        n = n + 1;
+    }
+    io.printInt(total / n);   // 平均分 82
+    io.println("");
+    sqlite.finalize(stmt);
     sqlite.close(db);
     return 0;
 }
 ```
 
-> 内部使用 prepared statement（`sqlite3_prepare_v2`），`query` 以文本形式打印各列；
-> 后续可扩展按列取值 API（`columnInt`/`columnText`）。
+> `query` 是"打印结果"的便捷版；`prepare/step/columnXxx` 是把数据读进变量的底层 API。
+> `columnText` 返回的指针指向 sqlite 内部缓冲，下次 `step` 前有效；需要长期保存请 `string.dup`。
+
+
+---
+
+# std.string 字符串操作
+
+`char*` 字符串（`\0` 结尾）操作库。需要 `import std.string;`（拼接/复制返回堆内存，用完 `mem.free`）。
+
+| 函数 | 说明 |
+|------|------|
+| `string.len(s)` | 字符串长度（不含末尾 `\0`） |
+| `string.cat(a, b)` | 拼接 `a + b`，返回**新分配**的堆字符串（调用方 free） |
+| `string.dup(s)` | 复制字符串，返回新分配的堆字符串（调用方 free） |
+| `string.eq(a, b)` | 内容相等比较（非指针比较），返回 bool |
+| `string.cmp(a, b)` | 字典序比较，返回 `<0 / 0 / >0` |
+
+```plang
+import std.io;
+import std.mem;
+import std.string;
+
+func main() : int {
+    var: string s = "hello";
+    var: string t = string.cat(s, " world!");
+    io.println(t);                    // hello world!
+    if (string.eq(s, "hello")) {
+        io.println("eq");
+    }
+    var: int c = string.cmp("a", "b");  // 负数
+    mem.free(t);                      // cat 的结果要释放
+    return 0;
+}
+```
+
+> 字符串字面量是全局常量（不可 free）；`cat`/`dup` 返回堆内存需释放。

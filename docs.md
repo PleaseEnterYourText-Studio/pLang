@@ -1,8 +1,8 @@
 # PLang 语言文档
 
 > **实现状态**：本文为语言设计文档。已实现：指针/数组、结构体/联合/位域/对齐、泛型结构体与泛型函数、sizeof、RAII（construction/destroy）、
-> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector/sqlite）。
-> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、`std.string` 库、模板函数自动生成、`?` 错误传播。
+> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector/string/sqlite）。
+> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、模板函数自动生成、`?` 错误传播。
 > 编译器：LLVM 优化（-O0~-O3）、DWARF 调试信息、错误恢复、独立编译单元、LSP（悬停/补全/跳转/重命名）。
 > 标准库通过 `import std.xxx` 独立编译为 `.o` 并与用户程序链接，见 `stdlib.md`。
 
@@ -389,7 +389,8 @@ extern var stdin : ptr;
 | `std.option` | null 安全 | `Option<T>` 泛型结构体：`{true, v}` 有值 / `{false, 0}` 无值 |
 | `std.result` | 错误处理 | `Result<T, E>` 泛型结构体：`{true, v, 0}` 成功 / `{false, 0, e}` 失败 |
 | `std.vector` | 动态数组 | `Vec<T>` 泛型容器：`vector.new/push/get/len/pop/destroy`，自动扩容 |
-| `std.sqlite` | 数据库 | SQLite 绑定：`sqlite.open/close/exec/query`，自动链接 -lsqlite3 |
+| `std.string` | 字符串操作 | `string.len/cat/dup/eq/cmp`（char\* 字符串） |
+| `std.sqlite` | 数据库 | SQLite 绑定：`sqlite.open/close/exec/query` + 按列取值，自动链接 -lsqlite3 |
 
 # 多线程 (std.thread)
 `std.thread` 是**真正的源码库**，位于 `std/thread/thread.plang`：`import std.thread;` 后编译器将该包独立编译为 `.o` 并与用户程序链接。
@@ -745,6 +746,13 @@ SQLite 数据库绑定（extern FFI 直通 libc sqlite3，**自动链接 `-lsqli
 - `sqlite.close(db)`: 关闭数据库.
 - `sqlite.exec(db, sql)`: 执行无返回的 SQL（CREATE/INSERT/UPDATE/DELETE），0=成功.
 - `sqlite.query(db, sql)`: 查询并逐行打印结果（列以 `|` 分隔）；失败打印错误信息.
+- `sqlite.prepare(db, sql)`: 准备一条 SQL，返回语句句柄（失败返回 `null`）.
+- `sqlite.step(stmt)`: 推进一行；`true`=有数据行，`false`=结束/出错.
+- `sqlite.columnCount(stmt)`: 当前行列数.
+- `sqlite.columnInt(stmt, col)`: 取当前行第 `col` 列为整数.
+- `sqlite.columnText(stmt, col)`: 取当前行第 `col` 列为字符串（指向 sqlite 内部缓冲）.
+- `sqlite.finalize(stmt)`: 释放语句.
+- `sqlite.errmsg(db)`: 最近一次错误的描述信息.
 
 ```plang
 import std.io;
@@ -754,16 +762,59 @@ func main() : int {
     var -> var: ptr db = sqlite.open("test.db");
     if (db == null) { io.println("open failed"); return 1; }
 
-    sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT)");
-    sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice')");
-    sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob')");
+    sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT, score INT)");
+    sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice', 90)");
+    sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob', 75)");
 
-    sqlite.query(db, "SELECT * FROM user");   // 输出：1|Alice  2|Bob
-
+    // 按列取值：数据读进变量做计算
+    var -> var: ptr stmt = sqlite.prepare(db, "SELECT id, name, score FROM user");
+    var: int total = 0;
+    var: int n = 0;
+    while (sqlite.step(stmt)) {
+        io.printInt(sqlite.columnInt(stmt, 0));
+        io.print(": ");
+        io.println(sqlite.columnText(stmt, 1));
+        total = total + sqlite.columnInt(stmt, 2);
+        n = n + 1;
+    }
+    io.printInt(total / n);   // 平均分 82
+    io.println("");
+    sqlite.finalize(stmt);
     sqlite.close(db);
     return 0;
 }
 ```
 
-> 内部使用 prepared statement（`sqlite3_prepare_v2`），`query` 以文本形式打印各列；
-> 后续可扩展按列取值 API（`columnInt`/`columnText`）.
+> `query` 是"打印结果"的便捷版；`prepare/step/columnXxx` 是把数据读进变量的底层 API。
+> `columnText` 返回的指针指向 sqlite 内部缓冲，下次 `step` 前有效；需要长期保存请 `string.dup`.
+
+# 字符串操作 (std.string)
+
+`char*` 字符串（`\0` 结尾）操作库。需要 `import std.string;`（拼接/复制返回堆内存，用完 `mem.free`）：
+
+- `string.len(s)`: 字符串长度（不含末尾 `\0`）.
+- `string.cat(a, b)`: 拼接 `a + b`，返回**新分配**的堆字符串（调用方 free）.
+- `string.dup(s)`: 复制字符串，返回新分配的堆字符串（调用方 free）.
+- `string.eq(a, b)`: 内容相等比较（非指针比较），返回 bool.
+- `string.cmp(a, b)`: 字典序比较，返回 `<0 / 0 / >0`.
+
+```plang
+import std.io;
+import std.mem;
+import std.string;
+
+func main() : int {
+    var: string s = "hello";
+    var: string t = string.cat(s, " world!");
+    io.println(t);                    // hello world!
+    if (string.eq(s, "hello")) {
+        io.println("eq");
+    }
+    var: int c = string.cmp("a", "b");  // 负数
+    mem.free(t);                      // cat 的结果要释放
+    return 0;
+}
+```
+
+> 字符串字面量是全局常量（不可 free）；`cat`/`dup` 返回堆内存需释放。
+> 编译器支持关键字作标识符（`string.len` 里的 `string`）与 char 转义（`'\n'` `'\0'` 等）。
