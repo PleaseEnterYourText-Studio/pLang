@@ -1,0 +1,37 @@
+package std.thread;
+
+// PLang 标准库：多线程。import std.thread 后编译器解析本包源码并合并编译，pub 函数可跨包调用。
+// 编译器内置（需蹦床/全局锁池，无法用源码表达）：thread.spawn(fn) / thread.sleep(ms) / thread.mutex.create()
+// 其余 API 均为下方源码实现。
+
+// extern C 声明（LLVM declare，不生成定义）
+extern func pthread_join(var -> var: ptr handle, var -> var: ptr result) : int;
+extern func sched_yield() : int;
+extern func pthread_mutex_lock(var -> var: ptr mutex) : int;
+extern func pthread_mutex_unlock(var -> var: ptr mutex) : int;
+extern func pthread_mutex_destroy(var -> var: ptr mutex) : int;
+
+// 阻塞等待线程结束
+pub func join(var -> var: ptr handle) {
+    pthread_join(handle, null);
+}
+
+// 当前线程主动让出 CPU
+pub func yield() {
+    sched_yield();
+}
+
+// 加锁（阻塞）
+pub func lock(var -> var: ptr mutex) {
+    pthread_mutex_lock(mutex);
+}
+
+// 解锁
+pub func unlock(var -> var: ptr mutex) {
+    pthread_mutex_unlock(mutex);
+}
+
+// 销毁
+pub func destroy(var -> var: ptr mutex) {
+    pthread_mutex_destroy(mutex);
+}

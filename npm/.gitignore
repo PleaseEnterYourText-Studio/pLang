@@ -1,0 +1,4 @@
+node_modules/
+*.tgz
+bin/plc
+bin/lsp-server
