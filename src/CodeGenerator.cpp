@@ -263,10 +263,6 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             if (auto* addr = dynamic_cast<AddressOfNode*>(node)) {
                 if (addr->operand->type == ASTNodeType::VARIABLE_REF) {
                     auto* ref = static_cast<VariableRefNode*>(addr->operand.get());
-                    // &函数名 —— 函数指针
-                    if (auto* fn = module->getFunction(ref->name)) {
-                        return fn;
-                    }
                     // &s.x / &a.b.c —— 结构体成员地址
                     size_t dot = ref->name.find('.');
                     if (dot != std::string::npos)
@@ -278,9 +274,14 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                         std::cerr << "Error: address-of member '" << ref->name << "' not found" << std::endl;
                         return nullptr;
                     }
+                    // 局部变量优先（变量可与函数同名，如局部 errmsg 遮蔽 errmsg 函数）
                     auto it = namedValues.find(ref->name);
                     if (it != namedValues.end()) {
                         return it->second.ptr;
+                    }
+                    // &函数名 —— 函数指针
+                    if (auto* fn = module->getFunction(ref->name)) {
+                        return fn;
                     }
                 }
                 std::cerr << "Error: address-of requires a variable" << std::endl;
