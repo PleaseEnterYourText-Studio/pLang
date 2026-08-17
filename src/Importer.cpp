@@ -5,6 +5,14 @@
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <limits.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -43,6 +51,34 @@ bool plangParseSourceFile(const std::string& filename, std::unique_ptr<ProgramNo
     return true;
 }
 
+// 真实可执行文件路径（跨平台，兼容软链/PATH 调用）
+std::string impGetExecutablePath()
+{
+#if defined(__APPLE__)
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0)
+    {
+        char real[4096];
+        if (realpath(buf, real) != nullptr) return std::string(real);
+        return std::string(buf);
+    }
+#elif defined(__linux__)
+    char buf[4096];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0)
+    {
+        buf[n] = '\0';
+        return std::string(buf);
+    }
+#elif defined(_WIN32)
+    char buf[4096];
+    DWORD n = GetModuleFileNameA(nullptr, buf, sizeof(buf));
+    if (n > 0) return std::string(buf, n);
+#endif
+    return "";
+}
+
 // 标准库根目录：import std.thread 对应 <root>/std/thread
 std::string plangGetStdlibRoot(const std::string& exePath)
 {
@@ -55,15 +91,17 @@ std::string plangGetStdlibRoot(const std::string& exePath)
         // LSP 等无 argv[0] 的场景：以当前工作目录为根（通常从项目根启动）
         return fs::current_path().string();
     }
-    // 默认：可执行文件所在目录的上一级（build/PLang → 仓库根）；规范化路径以兼容相对 argv[0]
+    // 用真实可执行文件路径（软链/PATH 调用也能定位到包内 std/）
+    std::string exe = impGetExecutablePath();
+    if (exe.empty()) exe = exePath;
     fs::path exeAbs;
     try
     {
-        exeAbs = fs::canonical(fs::path(exePath));
+        exeAbs = fs::canonical(fs::path(exe));
     }
     catch (...)
     {
-        exeAbs = fs::absolute(fs::path(exePath));
+        exeAbs = fs::absolute(fs::path(exe));
     }
     return exeAbs.parent_path().parent_path().string();
 }
