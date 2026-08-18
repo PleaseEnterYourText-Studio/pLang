@@ -86,14 +86,14 @@ std::string plangGetStdlibRoot(const std::string& exePath)
     {
         return env;
     }
-    if (exePath.empty())
-    {
-        // LSP 等无 argv[0] 的场景：以当前工作目录为根（通常从项目根启动）
-        return fs::current_path().string();
-    }
-    // 用真实可执行文件路径（软链/PATH 调用也能定位到包内 std/）
+    // 一律用真实可执行文件路径（LSP 无 argv[0] 也能定位到 std/；软链/PATH 调用同理）
     std::string exe = impGetExecutablePath();
     if (exe.empty()) exe = exePath;
+    if (exe.empty())
+    {
+        // 兜底：当前工作目录
+        return fs::current_path().string();
+    }
     fs::path exeAbs;
     try
     {
