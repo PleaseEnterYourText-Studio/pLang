@@ -95,13 +95,11 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
     
     std::string cmd;
 #if defined(__APPLE__)
-    cmd = "ld -o " + exePath;
+    // 用 clang 驱动链接：裸 ld 不生成 debug map，dsymutil 无法提取 .o 的 DWARF
+    cmd = "clang -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
-    cmd += " -lSystem -syslibroot $(xcrun --show-sdk-path) -e _main";
     if (needSqlite) cmd += " -lsqlite3";
 #elif defined(__linux__)
-    cmd = "ld -o " + exePath;
-    for (const auto& obj : objFiles) cmd += " " + obj;
     // Linux 需要 crt 文件，用 gcc 驱动更简单；多线程需要链接 pthread
     cmd = "g++ -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
@@ -117,7 +115,16 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
     return false;
 #endif
     
-    return std::system(cmd.c_str()) == 0;
+    bool ok = std::system(cmd.c_str()) == 0;
+#if defined(__APPLE__)
+    // 生成 dSYM：macOS 链接产物本身不含 DWARF，调试器需读 dSYM
+    if (ok)
+    {
+        std::string dsym = "dsymutil " + exePath + " >/dev/null 2>&1";
+        std::system(dsym.c_str());
+    }
+#endif
+    return ok;
 }
 
 // 标准库根目录
@@ -323,7 +330,7 @@ bool compilePackage(const std::vector<std::string>& files,
     Sema sema;
     if (!sema.analyze(merged)) return false;
     CodeGenerator generator;
-    generator.setSourceFileName(files[0]);  // DWARF 源文件名用真实输入
+    generator.setSourceFileName(files[0]);  // DWARF 用真实源文件名
     generator.generate(merged.get(), false); // 库包无入口
     generator.optimize(optLevel);
     if (!generator.verify())
@@ -460,7 +467,7 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
 
     // 5) 代码生成
     CodeGenerator generator;
-    generator.setSourceFileName(sources[0]);  // DWARF 源文件名用真实输入
+    generator.setSourceFileName(sources[0]);  // DWARF 用真实源文件名
     generator.generate(merged.get());
     generator.optimize(optLevel);
 
