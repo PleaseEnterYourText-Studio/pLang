@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+#include <filesystem>
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -149,10 +150,37 @@ void LspServer::analyzeDocument(DocumentState& doc)
         {
             collectSymbols(doc, doc.program->decls[i].get());
         }
-        // 标准库合并的符号：用于包成员补全（io. → io.println 等），标记 packageName
-        for (size_t i = ownDeclCount; i < doc.program->decls.size(); ++i)
+        // 标准库符号：从真实 std 源文件解析（带正确 uri，跳转/悬停可用）
         {
-            collectStdlibSymbols(doc, doc.program->decls[i].get());
+            namespace fs = std::filesystem;
+            std::string stdlibRoot = plangGetStdlibRoot("");
+            for (const auto& pkg : doc.importedModules)
+            {
+                std::string modPath = pkg;
+                std::replace(modPath.begin(), modPath.end(), '.', '/');
+                fs::path pkgDir = fs::path(stdlibRoot) / modPath;
+                if (!fs::is_directory(pkgDir)) continue;
+                for (const auto& entry : fs::directory_iterator(pkgDir))
+                {
+                    if (entry.path().extension() != ".plang") continue;
+                    std::string filePath = entry.path().string();
+                    std::ifstream f(filePath);
+                    if (!f.is_open()) continue;
+                    std::stringstream buf;
+                    buf << f.rdbuf();
+                    Lexer lx(buf.str());
+                    auto toks = lx.scanTokens();
+                    Parser ps(toks);
+                    std::unique_ptr<ProgramNode> prog;
+                    try { prog = ps.parse(); } catch (...) { continue; }
+                    if (!prog) continue;
+                    std::string uri = "file://" + filePath;
+                    for (auto& d : prog->decls)
+                    {
+                        collectStdlibSymbols(doc, d.get(), uri);
+                    }
+                }
+            }
         }
         doc.parsed = true;
     }
@@ -335,7 +363,8 @@ void LspServer::collectSymbols(DocumentState& doc, ASTNode* node)
 }
 
 // 标准库符号收集（合并进 doc.symbols，供包成员补全 io. → io.println 等）
-void LspServer::collectStdlibSymbols(DocumentState& doc, ASTNode* node)
+void LspServer::collectStdlibSymbols(DocumentState& doc, ASTNode* node,
+                                     const std::string& realUri)
 {
     if (!node) return;
     switch (node->type)
@@ -345,7 +374,7 @@ void LspServer::collectStdlibSymbols(DocumentState& doc, ASTNode* node)
             auto* fn = static_cast<FunctionDeclNode*>(node);
             SymbolInfo info;
             info.name = fn->name;   // 本名（println），补全时拼 io.println
-            info.uri = doc.uri;
+            info.uri = realUri;
             info.range = {{fn->line - 1, fn->column - 1},
                           {fn->line - 1, fn->column - 1 + (int)fn->name.size()}};
             info.selectionRange = info.range;
@@ -359,7 +388,7 @@ void LspServer::collectStdlibSymbols(DocumentState& doc, ASTNode* node)
             auto* st = static_cast<StructDeclNode*>(node);
             SymbolInfo info;
             info.name = st->name;
-            info.uri = doc.uri;
+            info.uri = realUri;
             info.range = {{st->line - 1, st->column - 1},
                           {st->line - 1, st->column - 1 + (int)st->name.size()}};
             info.selectionRange = info.range;

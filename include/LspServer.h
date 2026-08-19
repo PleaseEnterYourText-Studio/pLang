@@ -72,7 +72,8 @@ private:
     void closeDocument(const std::string& uri);
     void analyzeDocument(DocumentState& doc);
     void collectSymbols(DocumentState& doc, ASTNode* node);
-    void collectStdlibSymbols(DocumentState& doc, ASTNode* node);   // 标准库符号（包成员补全用）
+    void collectStdlibSymbols(DocumentState& doc, ASTNode* node,
+                              const std::string& realUri);   // 标准库符号（带真实文件 uri，跳转用）
 
     // LSP 方法
     llvm::json::Object initialize(const llvm::json::Value& params);
