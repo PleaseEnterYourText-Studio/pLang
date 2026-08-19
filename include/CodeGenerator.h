@@ -93,6 +93,8 @@ private:
     llvm::DIBuilder* dib = nullptr;
     llvm::DICompileUnit* debugCU = nullptr;
     llvm::DISubprogram* currentSubprogram = nullptr;
+    llvm::DIFile* debugFile = nullptr;          // 编译单元文件（懒创建，一次）
+    std::string sourceFileName = "main.plang";  // 源文件名（DWARF；默认值保持旧行为）
 
     // goto/label：函数内 label → 基本块（generateFunction 预建）
     std::unordered_map<std::string, llvm::BasicBlock*> labelBlocks;
@@ -120,6 +122,7 @@ public:
     ~CodeGenerator() = default;
 
     void generate(ProgramNode* root, bool emitMain = true);  // emitMain=false 用于库包（无入口）
+    void setSourceFileName(const std::string& path);  // 设置源文件名（DWARF 用）
     void setupDebugInfo();          // 模块级 DWARF 调试信息
     void setFunctionDebugInfo(llvm::Function* fn);  // 为函数建 DISubprogram
     void optimize(int optLevel);    // LLVM 优化 pass（0=不优化）

@@ -323,6 +323,7 @@ bool compilePackage(const std::vector<std::string>& files,
     Sema sema;
     if (!sema.analyze(merged)) return false;
     CodeGenerator generator;
+    generator.setSourceFileName(files[0]);  // DWARF 源文件名用真实输入
     generator.generate(merged.get(), false); // 库包无入口
     generator.optimize(optLevel);
     if (!generator.verify())
@@ -459,6 +460,7 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
 
     // 5) 代码生成
     CodeGenerator generator;
+    generator.setSourceFileName(sources[0]);  // DWARF 源文件名用真实输入
     generator.generate(merged.get());
     generator.optimize(optLevel);
 

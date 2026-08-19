@@ -2,6 +2,8 @@
 #include "../include/TypeSystem.h"
 #include <iostream>
 #include <algorithm>
+#include <string>
+#include <filesystem>
 #include "llvm/TargetParser/Host.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Target/TargetMachine.h"
@@ -22,6 +24,12 @@ CodeGenerator::CodeGenerator()
     : builder(context), currentFunction(nullptr)
 {
     module = std::make_unique<llvm::Module>("PLang", context);
+}
+
+// 设置源文件名（DWARF 调试信息用；不调用则保持 "main.plang" 旧行为）
+void CodeGenerator::setSourceFileName(const std::string& path)
+{
+    sourceFileName = path.empty() ? "main.plang" : path;
 }
 
 llvm::Type* CodeGenerator::getLLVMType(ASTNodeType type)
@@ -82,6 +90,15 @@ llvm::Type* CodeGenerator::getLLVMType(TypeNode* type)
 
 llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
 {
+    // 浮点优先：TypeSystem::bitWidth 对 f32/f64 返回 32/64，若先走位宽 switch
+    // 会被误映射成 i32/i64 —— 泛型实例化（substituteType 生成 TYPE_PRIMITIVE+"f64"）
+    // 恰好走此字符串路径，曾导致 id<f64>(2.5) 返回 2.0 的类型损坏 bug。
+    if (typeName == "f32") {
+        return llvm::Type::getFloatTy(context);
+    } else if (typeName == "f64") {
+        return llvm::Type::getDoubleTy(context);
+    }
+
     // D1：类型位宽统一由 TypeSystem 提供，消除裸字符串链
     int bits = TypeSystem::bitWidth(typeName);
     switch (bits)
@@ -93,11 +110,7 @@ llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
         case 64: return llvm::Type::getInt64Ty(context);
         default: break;
     }
-    if (typeName == "f32") {
-        return llvm::Type::getFloatTy(context);
-    } else if (typeName == "f64") {
-        return llvm::Type::getDoubleTy(context);
-    } else if (typeName == "string" || typeName == "pointer" || typeName == "ptr" || typeName == "func") {
+    if (typeName == "string" || typeName == "pointer" || typeName == "ptr" || typeName == "func") {
         return llvm::PointerType::get(context, 0);
     } else if (typeName == "void") {
         return llvm::Type::getVoidTy(context);
@@ -1057,18 +1070,27 @@ void CodeGenerator::setupDebugInfo()
     if (!dib)
     {
         dib = new llvm::DIBuilder(*module);
-        auto* file = dib->createFile("main.plang", ".");
-        debugCU = dib->createCompileUnit(llvm::dwarf::DW_LANG_C, file, "PLang", false, "", 0);
+        // 源文件名与目录取自真实输入文件（不再是硬编码 "main.plang"）
+        namespace fs = std::filesystem;
+        std::string dir = ".";
+        std::string name = sourceFileName;
+        fs::path p(sourceFileName);
+        if (p.has_parent_path())
+        {
+            dir = p.parent_path().string();
+            name = p.filename().string();
+        }
+        debugFile = dib->createFile(name, dir);
+        debugCU = dib->createCompileUnit(llvm::dwarf::DW_LANG_C, debugFile, "PLang", false, "", 0);
     }
 }
 
 // 为函数创建 DISubprogram 并设为当前（供 DebugLoc 引用）
 void CodeGenerator::setFunctionDebugInfo(llvm::Function* fn)
 {
-    if (!dib) return;
-    auto* file = dib->createFile("main.plang", ".");
+    if (!dib || !debugFile) return;
     auto* subTy = dib->createSubroutineType(dib->getOrCreateTypeArray({}));
-    currentSubprogram = dib->createFunction(debugCU, fn->getName(), fn->getName(), file, 0,
+    currentSubprogram = dib->createFunction(debugCU, fn->getName(), fn->getName(), debugFile, 0,
                                             subTy, 0, llvm::DINode::FlagZero,
                                             llvm::DISubprogram::SPFlagDefinition);
     fn->setSubprogram(currentSubprogram);
