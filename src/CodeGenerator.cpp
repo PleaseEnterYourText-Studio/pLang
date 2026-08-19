@@ -16,6 +16,7 @@
 #include "llvm/Analysis/LoopAnalysisManager.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Intrinsics.h"
 
 // 类型大小（字节）：用于 union 取最大字段
 static unsigned typeSizeBytes(llvm::Type* ty);
@@ -26,7 +27,7 @@ CodeGenerator::CodeGenerator()
     module = std::make_unique<llvm::Module>("PLang", context);
 }
 
-// 设置源文件名（DWARF 调试信息用；不调用则保持 "main.plang" 旧行为）
+// 设置 DWARF 源文件名（默认 main.plang）
 void CodeGenerator::setSourceFileName(const std::string& path)
 {
     sourceFileName = path.empty() ? "main.plang" : path;
@@ -90,9 +91,7 @@ llvm::Type* CodeGenerator::getLLVMType(TypeNode* type)
 
 llvm::Type* CodeGenerator::getLLVMType(const std::string& typeName)
 {
-    // 浮点优先：TypeSystem::bitWidth 对 f32/f64 返回 32/64，若先走位宽 switch
-    // 会被误映射成 i32/i64 —— 泛型实例化（substituteType 生成 TYPE_PRIMITIVE+"f64"）
-    // 恰好走此字符串路径，曾导致 id<f64>(2.5) 返回 2.0 的类型损坏 bug。
+    // 浮点优先：bitWidth 对 f32/f64 返回 32/64，先走位宽 switch 会被误映射成 i32/i64
     if (typeName == "f32") {
         return llvm::Type::getFloatTy(context);
     } else if (typeName == "f64") {
@@ -567,6 +566,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             if (align > 0) alloca->setAlignment(llvm::Align(align));
             namedValues[decl->name] = VarInfo{alloca, varType};
             if (decl->isVolatile) volatileVars.insert(decl->name);
+            emitDbgDeclare(decl->name, alloca, varType, decl->line);
 
             if (decl->initializer) {
                 if (decl->initializer->type == ASTNodeType::BLOCK_STMT &&
@@ -1034,6 +1034,10 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
         {
             namedValueElementTypes["this"] = structDefs[structName].type; // this 指向结构体
         }
+        // this 登记为 DWARF 参数 1
+        builder.SetCurrentDebugLocation(
+            llvm::DILocation::get(context, fn->line, 0, currentSubprogram));
+        emitDbgDeclare("this", thisAlloca, thisArg.getType(), fn->line, true, 1);
         argIdx = 1;
     }
     for (auto& arg : func->args()) {
@@ -1047,6 +1051,10 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
             if (param->type && param->type->baseType == ASTNodeType::TYPE_POINTER && param->type->inner) {
                 namedValueElementTypes[param->name] = getLLVMType(param->type->inner.get());
             }
+            // 参数登记进 DWARF
+            builder.SetCurrentDebugLocation(
+                llvm::DILocation::get(context, param->line, 0, currentSubprogram));
+            emitDbgDeclare(param->name, alloca, arg.getType(), param->line, true, paramIdx + 1);
         }
         ++argIdx;
     }
@@ -1070,7 +1078,7 @@ void CodeGenerator::setupDebugInfo()
     if (!dib)
     {
         dib = new llvm::DIBuilder(*module);
-        // 源文件名与目录取自真实输入文件（不再是硬编码 "main.plang"）
+        // 文件与目录取自真实输入
         namespace fs = std::filesystem;
         std::string dir = ".";
         std::string name = sourceFileName;
@@ -1085,15 +1093,89 @@ void CodeGenerator::setupDebugInfo()
     }
 }
 
-// 为函数创建 DISubprogram 并设为当前（供 DebugLoc 引用）
+// 创建 DISubprogram（子程序类型带返回与参数类型）
 void CodeGenerator::setFunctionDebugInfo(llvm::Function* fn)
 {
     if (!dib || !debugFile) return;
-    auto* subTy = dib->createSubroutineType(dib->getOrCreateTypeArray({}));
+    llvm::SmallVector<llvm::Metadata*, 8> argTys;
+    // 第一个元素 = 返回类型（void 用 nullptr）
+    llvm::Type* retTy = fn->getReturnType();
+    argTys.push_back(retTy->isVoidTy() ? nullptr : getDebugType(retTy));
+    for (auto& arg : fn->args())
+    {
+        argTys.push_back(getDebugType(arg.getType()));
+    }
+    auto* subTy = dib->createSubroutineType(dib->getOrCreateTypeArray(argTys));
     currentSubprogram = dib->createFunction(debugCU, fn->getName(), fn->getName(), debugFile, 0,
                                             subTy, 0, llvm::DINode::FlagZero,
                                             llvm::DISubprogram::SPFlagDefinition);
     fn->setSubprogram(currentSubprogram);
+}
+
+// LLVM 类型映射为 DWARF 类型（结构体暂为不透明）
+llvm::DIType* CodeGenerator::getDebugType(llvm::Type* ty)
+{
+    if (!ty || !dib) return nullptr;
+    if (ty->isIntegerTy())
+    {
+        unsigned bits = ty->getIntegerBitWidth();
+        if (bits == 1)
+            return dib->createBasicType("bool", 1, llvm::dwarf::DW_ATE_boolean);
+        return dib->createBasicType("i" + std::to_string(bits), bits, llvm::dwarf::DW_ATE_signed);
+    }
+    if (ty->isFloatingPointTy())
+    {
+        unsigned bits = ty->getPrimitiveSizeInBits();
+        return dib->createBasicType(bits == 32 ? "f32" : "f64", bits, llvm::dwarf::DW_ATE_float);
+    }
+    if (ty->isPointerTy())
+    {
+        llvm::DIType* pointee = dib->createUnspecifiedType("void");
+        return dib->createPointerType(pointee, 64);
+    }
+    if (ty->isArrayTy())
+    {
+        llvm::DIType* elem = getDebugType(ty->getArrayElementType());
+        uint64_t n = ty->getArrayNumElements();
+        llvm::SmallVector<llvm::Metadata*, 1> subs;
+        subs.push_back(dib->getOrCreateSubrange(0, n));
+        return dib->createArrayType(n, 0, elem, dib->getOrCreateArray(subs));
+    }
+    if (ty->isStructTy())
+    {
+        std::string sname = structNameOf(ty);
+        return dib->createUnspecifiedType(sname.empty() ? "struct" : sname);
+    }
+    return dib->createUnspecifiedType("opaque");
+}
+
+// llvm.dbg.declare：alloca 绑定 DWARF 变量（参数用 DW_TAG_formal_parameter）
+void CodeGenerator::emitDbgDeclare(const std::string& name, llvm::Value* addr,
+                                   llvm::Type* ty, int line, bool isParam, unsigned argNo)
+{
+    if (!dib || !currentSubprogram || !addr) return;
+    llvm::DILocalVariable* var = nullptr;
+    if (isParam)
+    {
+        var = dib->createParameterVariable(currentSubprogram, name, argNo,
+                                           debugFile, line, getDebugType(ty), true);
+    }
+    else
+    {
+        var = dib->createAutoVariable(currentSubprogram, name, debugFile, line,
+                                      getDebugType(ty), true);
+    }
+    llvm::Function* dbgDeclare = llvm::Intrinsic::getOrInsertDeclaration(
+        module.get(), llvm::Intrinsic::dbg_declare, llvm::Type::getVoidTy(context),
+        {llvm::Type::getMetadataTy(context), llvm::Type::getMetadataTy(context),
+         llvm::Type::getMetadataTy(context)});
+
+    llvm::Value* args[] = {
+        llvm::MetadataAsValue::get(context, llvm::ValueAsMetadata::get(addr)),
+        llvm::MetadataAsValue::get(context, var),
+        llvm::MetadataAsValue::get(context, llvm::DIExpression::get(context, {})),
+    };
+    builder.CreateCall(dbgDeclare, args);
 }
 
 // 运行 LLVM 优化管线（需先设置目标三元组与数据布局）
@@ -1398,6 +1480,13 @@ bool CodeGenerator::emitObject(const std::string& filename)
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();
+
+    // 指令形式 debug intrinsics → DbgRecord：LLVM 20+ 的 SelectionDAG 只识别
+    // DbgRecord，传统 call 形式（IRBuilder::CreateCall 产生）会在 legacy PM
+    // 的指令选择阶段崩溃。parseIR 读入的 IR 自动是 DbgRecord，故此前未暴露。
+    for (auto& fn : *module)
+        for (auto& bb : fn)
+            bb.convertToNewDbgValues();
 
     auto targetTriple = llvm::sys::getDefaultTargetTriple();
     llvm::Triple triple(targetTriple);
