@@ -452,6 +452,7 @@ llvm::json::Object LspServer::initialize(const llvm::json::Value& params)
     capabilities["definitionProvider"] = true;
     capabilities["documentSymbolProvider"] = true;
     capabilities["renameProvider"] = true;
+    capabilities["referencesProvider"] = true;
     capabilities["hoverProvider"] = true;
     capabilities["completionProvider"] = llvm::json::Object{
         {"triggerCharacters", llvm::json::Array{"."}},
@@ -704,6 +705,63 @@ llvm::json::Value LspServer::getRename(const std::string& uri, int line, int cha
     return llvm::json::Value(llvm::json::Object{{"changes", llvm::json::Value(std::move(changes))}});
 }
 
+// 查找符号的所有引用（当前文件 + 所有已打开文档）
+// 复用 getRename 的扫描逻辑：跳过字符串与行注释，按标识符精确匹配
+llvm::json::Value LspServer::getReferences(const std::string& uri, int line, int character)
+{
+    auto it = documents.find(uri);
+    if (it == documents.end()) return llvm::json::Array{};
+
+    const DocumentState& doc = *it->second;
+    std::string name = findSymbolNameAt(doc, line, character);
+    if (name.empty()) return llvm::json::Array{};
+
+    llvm::json::Array locations;
+    for (const auto& entry : documents)
+    {
+        const DocumentState& d = *entry.second;
+        std::istringstream stream(d.text);
+        std::string cur;
+        for (int ln = 0; std::getline(stream, cur); ++ln)
+        {
+            bool inStr = false;
+            for (int i = 0; i < (int)cur.size(); ++i)
+            {
+                char c = cur[i];
+                if (inStr)
+                {
+                    if (c == '\\') ++i;   // 转义：跳过下一字符
+                    else if (c == '"') inStr = false;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inStr = true;
+                    continue;
+                }
+                if (c == '/' && i + 1 < (int)cur.size() && cur[i + 1] == '/') break; // 行注释
+                if (std::isalnum(c) || c == '_')
+                {
+                    int start = i;
+                    while (i < (int)cur.size() && (std::isalnum(cur[i]) || cur[i] == '_')) ++i;
+                    if (cur.substr(start, i - start) == name)
+                    {
+                        llvm::json::Object loc;
+                        loc["uri"] = entry.first;
+                        loc["range"] = llvm::json::Object{
+                            {"start", llvm::json::Object{{"line", ln}, {"character", start}}},
+                            {"end", llvm::json::Object{{"line", ln}, {"character", i}}},
+                        };
+                        locations.push_back(llvm::json::Value(std::move(loc)));
+                    }
+                    --i;
+                }
+            }
+        }
+    }
+    return llvm::json::Value(std::move(locations));
+}
+
 llvm::json::Value LspServer::getSymbols(const std::string& uri)
 {
     auto it = documents.find(uri);
@@ -714,7 +772,13 @@ llvm::json::Value LspServer::getSymbols(const std::string& uri)
     {
         llvm::json::Object s;
         s["name"] = sym.name;
-        s["kind"] = 12; // 简化
+        // LSP SymbolKind：12=Function 13=Variable 14=Constant 23=Struct 3=Namespace
+        int lspKind = 12;
+        if (sym.kind == "variable" || sym.kind == "parameter") lspKind = 13;
+        else if (sym.kind == "constant") lspKind = 14;
+        else if (sym.kind == "type" || sym.kind == "struct") lspKind = 23;
+        else if (sym.kind == "namespace") lspKind = 3;
+        s["kind"] = lspKind;
         s["range"] = llvm::json::Object{
             {"start", llvm::json::Object{{"line", sym.range.start.line}, {"character", sym.range.start.character}}},
             {"end", llvm::json::Object{{"line", sym.range.end.line}, {"character", sym.range.end.character}}},
@@ -901,6 +965,17 @@ llvm::json::Value LspServer::handleRequest(const std::string& method, const llvm
         auto newName = obj->getString("newName");
         if (!uri || !newName) return nullptr;
         return getRename(uri->str(), line, character, newName->str());
+    }
+    if (method == "textDocument/references")
+    {
+        auto* obj = params.getAsObject();
+        auto* td = obj->getObject("textDocument");
+        auto uri = td->getString("uri");
+        auto* pos = obj->getObject("position");
+        int line = (int)*pos->getInteger("line");
+        int character = (int)*pos->getInteger("character");
+        if (!uri) return nullptr;
+        return getReferences(uri->str(), line, character);
     }
     if (method == "textDocument/documentSymbol")
     {
