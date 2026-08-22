@@ -1,0 +1,257 @@
+package std.map;
+import std.mem;
+import std.string;
+import std.option;
+
+// PLang 标准库：字符串键哈希表（开放寻址，泛型值）。
+// 桶数为 2 的幂；负载因子超过 3/4 时翻倍扩容并清除墓碑（删除留下的空洞）。
+// 键由 put 复制（堆副本），destroy/clear/remove 时释放；
+// 值按位拷贝，要求值类型为 POD 或由调用方管理生命周期（整型/指针/简单结构体）。
+//
+// 用法：
+//   var: Map<int> m = map.new<int>(16);
+//   map.put<int>(&m, "apple", 3);
+//   map.put<int>(&m, "pear", 5);
+//   var: Option<int> r = map.get<int>(&m, "apple");
+//   if (r.isSome) { var: int n = r.value; ... }
+//   var: bool has = map.contains<int>(&m, "pear");
+//   map.remove<int>(&m, "apple");
+//   // 遍历键：
+//   var: int i = 0;
+//   while (i < map.len<int>(&m)) {
+//       var -> var: ptr k = map.keyAt<int>(&m, i);
+//       i = i + 1;
+//   }
+//   map.destroy<int>(&m);
+
+using Map = struct<T: type> {
+    pub var -> var: int slots;   // 0=空 1=占用 2=已删除（墓碑）
+    pub var -> var: ptr keys;    // char* 数组（键的堆副本）
+    pub var -> var: T values;    // 值数组
+    pub val: int cap;            // 桶数量（2 的幂）
+    pub val: int used;           // 占用+删除 的桶数（触发扩容）
+    pub val: int count;          // 有效条目数
+};
+
+// 字符串哈希（djb2 变体）
+pub func hash(var -> var: char s) : int {
+    var: int h = 5381;
+    var: int i = 0;
+    while (s[i] != '\0') {
+        h = h * 33 + int as s[i];
+        i = i + 1;
+    }
+    return h;
+}
+
+// 创建空表（cap 个桶，自动取不小于 cap 的 2 的幂，最小 16）
+pub func new<T: type>(val: int cap) -> Map<T> {
+    var: int c = 16;
+    if (cap > 16) {
+        c = 16;
+        while (c < cap) {
+            c = c * 2;
+        }
+    }
+    var -> var: int slots = mem.malloc(c * sizeof(int));
+    var -> var: ptr keys = mem.malloc(c * sizeof(ptr));
+    var -> var: T values = mem.malloc(c * sizeof(T));
+    mem.memset(slots, 0, c * sizeof(int));
+    mem.memset(keys, 0, c * sizeof(ptr));
+    mem.memset(values, 0, c * sizeof(T));
+    var: Map<T> m = {slots, keys, values, c, 0, 0};
+    return m;
+}
+
+// 插入/覆盖键值对
+pub func put<T: type>(var -> var: Map<T> m, var -> var: char key, val: T v) {
+    // 负载因子超过 3/4：扩容并重排（内联实现，避免泛型函数互调）
+    if (m.used * 4 >= m.cap * 3) {
+        var: int oldCap = m.cap;
+        var: int newCap = oldCap * 2;
+        var -> var: int nSlots = mem.malloc(newCap * sizeof(int));
+        var -> var: ptr nKeys = mem.malloc(newCap * sizeof(ptr));
+        var -> var: T nValues = mem.malloc(newCap * sizeof(T));
+        var: int z = 0;
+        while (z < newCap) {
+            nSlots[z] = 0;
+            z = z + 1;
+        }
+        var: int i2 = 0;
+        while (i2 < oldCap) {
+            if (m.slots[i2] == 1) {
+                var: int idx2 = hash(m.keys[i2]) & (newCap - 1);
+                var: int j2 = 0;
+                while (j2 < newCap) {
+                    var: int slot2 = (idx2 + j2) & (newCap - 1);
+                    if (nSlots[slot2] == 0) {
+                        nKeys[slot2] = m.keys[i2];
+                        nValues[slot2] = m.values[i2];
+                        nSlots[slot2] = 1;
+                        j2 = newCap;
+                    }
+                    j2 = j2 + 1;
+                }
+            }
+            i2 = i2 + 1;
+        }
+        mem.free(m.slots);
+        mem.free(m.keys);
+        mem.free(m.values);
+        m.slots = nSlots;
+        m.keys = nKeys;
+        m.values = nValues;
+        m.cap = newCap;
+        m.used = m.count;
+    }
+
+    var: int idx = hash(key) & (m.cap - 1);
+    var: int firstTomb = -1;
+    var: int i = 0;
+    while (i < m.cap) {
+        var: int slot = (idx + i) & (m.cap - 1);
+        if (m.slots[slot] == 0) {
+            if (firstTomb >= 0) {
+                slot = firstTomb;
+            }
+            m.keys[slot] = string.dup(key);
+            m.values[slot] = v;
+            m.slots[slot] = 1;
+            m.used = m.used + 1;
+            m.count = m.count + 1;
+            i = m.cap;
+        } else if (m.slots[slot] == 1) {
+            if (string.eq(m.keys[slot], key)) {
+                m.values[slot] = v;
+                i = m.cap;
+            } else {
+                i = i + 1;
+            }
+        } else {
+            if (firstTomb < 0) {
+                firstTomb = slot;
+            }
+            i = i + 1;
+        }
+    }
+}
+
+// 取值。未找到时 isSome=false（value 无效）
+// 注意：编译器 && 不做短路求值，探测必须用嵌套 if，避免对空槽/墓碑槽调用 string.eq
+pub func get<T: type>(var -> var: Map<T> m, var -> var: char key) -> Option<T> {
+    var: int idx = hash(key) & (m.cap - 1);
+    var: int i = 0;
+    while (i < m.cap) {
+        var: int slot = (idx + i) & (m.cap - 1);
+        if (m.slots[slot] == 0) {
+            var: Option<T> none = {false, m.values[0]};
+            return none;
+        }
+        if (m.slots[slot] == 1) {
+            if (string.eq(m.keys[slot], key)) {
+                var: Option<T> some = {true, m.values[slot]};
+                return some;
+            }
+        }
+        i = i + 1;
+    }
+    var: Option<T> none2 = {false, m.values[0]};
+    return none2;
+}
+
+// 是否包含键
+pub func contains<T: type>(var -> var: Map<T> m, var -> var: char key) : bool {
+    var: int idx = hash(key) & (m.cap - 1);
+    var: int i = 0;
+    while (i < m.cap) {
+        var: int slot = (idx + i) & (m.cap - 1);
+        if (m.slots[slot] == 0) return false;
+        if (m.slots[slot] == 1) {
+            if (string.eq(m.keys[slot], key)) return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// 删除键，返回是否删除成功
+pub func remove<T: type>(var -> var: Map<T> m, var -> var: char key) : bool {
+    var: int idx = hash(key) & (m.cap - 1);
+    var: int i = 0;
+    while (i < m.cap) {
+        var: int slot = (idx + i) & (m.cap - 1);
+        if (m.slots[slot] == 0) return false;
+        if (m.slots[slot] == 1) {
+            if (string.eq(m.keys[slot], key)) {
+                mem.free(m.keys[slot]);
+                m.keys[slot] = null;
+                m.slots[slot] = 2;
+                m.count = m.count - 1;
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// 有效条目数
+pub func len<T: type>(var -> var: Map<T> m) : int {
+    return m.count;
+}
+
+// 桶数量（2 的幂）
+pub func cap<T: type>(var -> var: Map<T> m) : int {
+    return m.cap;
+}
+
+// 第 n 个有效键（借用，不释放）。n 超出范围返回 null
+pub func keyAt<T: type>(var -> var: Map<T> m, val: int n) -> var: ptr {
+    var: int i = 0;
+    var: int seen = 0;
+    while (i < m.cap) {
+        if (m.slots[i] == 1) {
+            if (seen == n) {
+                return m.keys[i];
+            }
+            seen = seen + 1;
+        }
+        i = i + 1;
+    }
+    return null;
+}
+
+// 清空（释放所有键副本，不释放桶数组）
+pub func clear<T: type>(var -> var: Map<T> m) {
+    var: int i = 0;
+    while (i < m.cap) {
+        if (m.slots[i] == 1) {
+            mem.free(m.keys[i]);
+            m.keys[i] = null;
+        }
+        m.slots[i] = 0;
+        i = i + 1;
+    }
+    m.used = 0;
+    m.count = 0;
+}
+
+// 释放整个表
+pub func destroy<T: type>(var -> var: Map<T> m) {
+    var: int i = 0;
+    while (i < m.cap) {
+        if (m.slots[i] == 1) {
+            mem.free(m.keys[i]);
+        }
+        i = i + 1;
+    }
+    mem.free(m.slots);
+    mem.free(m.keys);
+    mem.free(m.values);
+    m.slots = null;
+    m.keys = null;
+    m.values = null;
+    m.cap = 0;
+    m.used = 0;
+    m.count = 0;
+}

@@ -15,7 +15,10 @@
 | `std.option` | `import std.option;` | null 安全：`Option<T>` 泛型结构体 |
 | `std.result` | `import std.result;` | 错误处理：`Result<T, E>` 泛型结构体 |
 | `std.vector` | `import std.vector;` | 动态数组：`Vec<T>` 泛型容器，自动扩容 |
-| `std.string` | `import std.string;` | 字符串操作：len/cat/dup/eq/cmp |
+| `std.string` | `import std.string;` | 字符串操作：len/cat/dup/eq/cmp + 子串/查找/大小写/替换/解析 |
+| `std.fs` | `import std.fs;` | 文件系统：读/写/定位/删除/重命名/读整个文件 |
+| `std.buffer` | `import std.buffer;` | 可变长字符串构建器（StringBuilder） |
+| `std.map` | `import std.map;` | 字符串键哈希表：`Map<T>` 泛型容器 |
 | `std.sqlite` | `import std.sqlite;` | 数据库：SQLite 绑定，自动链接 -lsqlite3 |
 
 ---
@@ -453,22 +456,167 @@ func main() : int {
 | `string.eq(a, b)` | 内容相等比较（非指针比较），返回 bool |
 | `string.cmp(a, b)` | 字典序比较，返回 `<0 / 0 / >0` |
 
+**扩展（自举用，返回堆内存的调用方 `mem.free`）：**
+
+| 函数 | 说明 |
+|------|------|
+| `string.sub(s, start, n)` | 截取子串 `s[start..start+n)`，越界自动裁剪 |
+| `string.find(hay, needle)` | 子串首次出现位置，未找到返回 -1 |
+| `string.rfind(hay, needle)` | 子串最后一次出现位置，未找到返回 -1 |
+| `string.contains(hay, needle)` | 是否包含子串 |
+| `string.startsWith(s, prefix)` | 前缀匹配 |
+| `string.endsWith(s, suffix)` | 后缀匹配 |
+| `string.trim(s)` | 去除首尾空白（空格/制表/换行/回车） |
+| `string.toUpper(s)` / `string.toLower(s)` | 大小写副本 |
+| `string.replace(s, from, to)` | 替换所有出现 |
+| `string.parseInt(s, base)` | 按 base（2/8/10/16）解析，失败返回 0 |
+| `string.intToStr(n)` | 整数 → 十进制堆字符串 |
+| `string.isDigit/isAlpha/isSpace/isAlnum/isUpper/isLower(c)` | 字符分类 |
+| `string.toUpperChar/toLowerChar(c)` | 字符大小写转换 |
+
+> 字符串字面量是全局常量（不可 free）；`cat`/`dup`/`sub`/`trim`/`toUpper`/`toLower`/`replace`/`intToStr` 返回堆内存需释放。
+
 ```plang
 import std.io;
 import std.mem;
 import std.string;
 
 func main() : int {
-    var: string s = "hello";
-    var: string t = string.cat(s, " world!");
-    io.println(t);                    // hello world!
-    if (string.eq(s, "hello")) {
-        io.println("eq");
-    }
-    var: int c = string.cmp("a", "b");  // 负数
-    mem.free(t);                      // cat 的结果要释放
+    var -> var: ptr s = string.trim("  hello  ");
+    io.println(s);                     // hello
+    var: int i = string.find("a-b-c", "-");
+    io.printInt(i); io.println("");    // 1
+    var: i64 n = string.parseInt("ff", 16);
+    io.printInt(int as n); io.println("");  // 255
+    mem.free(s);
     return 0;
 }
 ```
 
-> 字符串字面量是全局常量（不可 free）；`cat`/`dup` 返回堆内存需释放。
+---
+
+# std.fs 文件系统
+
+`extern` 直通 libc stdio。`FILE*` 句柄用 `ptr` 表示，打开失败返回 `null`。需要 `import std.fs;`。
+
+| 函数 | 说明 |
+|------|------|
+| `fs.openFile(path, mode)` | 打开文件（`"r" "w" "a" "rb" "wb" "r+"...`），失败返回 `null` |
+| `fs.closeFile(fp)` | 关闭，返回 0=成功 |
+| `fs.readBytes(buf, size, count, fp)` | 读 `count` 个 `size` 字节块，返回实际块数 |
+| `fs.writeBytes(buf, size, count, fp)` | 写入，返回实际块数 |
+| `fs.readByte(fp)` | 读一个字节，EOF 返回 -1 |
+| `fs.writeByte(c, fp)` | 写一个字节 |
+| `fs.writeStr(fp, s)` | 写字符串（不含结束符） |
+| `fs.writeLine(fp, s)` | 写字符串并换行 |
+| `fs.seek(fp, offset, origin)` | 定位（0=头 1=当前 2=尾） |
+| `fs.tell(fp)` | 当前位置 |
+| `fs.eof(fp)` | 是否到文件尾 |
+| `fs.size(fp)` | 文件总字节数（不改变位置） |
+| `fs.removeFile(path)` | 删除文件，返回 0=成功 |
+| `fs.renameFile(old, new)` | 重命名/移动，返回 0=成功 |
+| `fs.exists(path)` | 文件是否存在 |
+| `fs.readAll(path)` | 读整个文件到堆缓冲（`\0` 结尾），失败返回 `null`（调用方 free） |
+| `fs.writeAll(path, content)` | 把字符串写入文件（覆盖），返回 bool |
+| `fs.writeAllBytes(path, buf, n)` | 把前 `n` 字节写入文件（覆盖），返回 bool |
+
+```plang
+import std.fs;
+import std.mem;
+import std.io;
+
+func main() : int {
+    fs.writeAll("test.txt", "hello\n");
+    var -> var: ptr data = fs.readAll("test.txt");
+    if (data != null) {
+        io.print(data);   // hello
+        mem.free(data);
+    }
+    fs.removeFile("test.txt");
+    return 0;
+}
+```
+
+---
+
+# std.buffer 字符串构建器
+
+可变长字符缓冲（StringBuilder），用于逐步拼装字符串，避免反复 `cat` 分配。需要 `import std.buffer;`。
+
+| 函数 | 说明 |
+|------|------|
+| `buffer.new()` | 创建空缓冲，返回 `Buf` |
+| `buffer.append(&b, s)` | 追加字符串 |
+| `buffer.appendChar(&b, c)` | 追加字符 |
+| `buffer.appendInt(&b, n)` | 追加整数（十进制） |
+| `buffer.appendFloat(&b, f)` | 追加浮点数（固定 6 位小数） |
+| `buffer.clear(&b)` | 清空（不释放内存） |
+| `buffer.cstr(&b)` | 返回堆上 `\0` 结尾副本（调用方 free） |
+| `buffer.data(&b)` | 内部缓冲指针（借用，不释放） |
+| `buffer.destroy(&b)` | 释放堆内存 |
+
+```plang
+import std.buffer;
+import std.io;
+import std.mem;
+
+func main() : int {
+    var: Buf b = buffer.new();
+    buffer.append(&b, "x = ");
+    buffer.appendInt(&b, 42);
+    buffer.appendChar(&b, '\n');
+    var -> var: ptr s = buffer.cstr(&b);
+    io.print(s);            // x = 42
+    mem.free(s);
+    buffer.destroy(&b);
+    return 0;
+}
+```
+
+---
+
+# std.map 哈希表
+
+字符串键 → 泛型值的开放寻址哈希表，桶数为 2 的幂，负载因子超过 3/4 自动翻倍扩容。需要 `import std.map;`。
+
+| 函数 | 说明 |
+|------|------|
+| `map.new<T>(cap)` | 创建空表，返回 `Map<T>` |
+| `map.put<T>(&m, key, v)` | 插入/覆盖键值对（键自动复制） |
+| `map.get<T>(&m, key)` | 取值，返回 `Option<T>`（`isSome=false` 表示未找到） |
+| `map.contains<T>(&m, key)` | 是否包含键 |
+| `map.remove<T>(&m, key)` | 删除键，返回是否删除成功 |
+| `map.len<T>(&m)` | 有效条目数 |
+| `map.cap<T>(&m)` | 桶数量（2 的幂） |
+| `map.keyAt<T>(&m, n)` | 第 n 个有效键（借用指针，不释放） |
+| `map.clear<T>(&m)` | 清空（释放键副本） |
+| `map.destroy<T>(&m)` | 释放整个表 |
+
+- 键由 `put` 复制（堆副本），`destroy`/`clear`/`remove` 时释放；**值按位拷贝**，要求值类型为 POD 或由调用方管理生命周期。
+- 遍历键：`for` 循环从 `keyAt(&m, 0)` 到 `keyAt(&m, len-1)`。
+
+```plang
+import std.io;
+import std.map;
+import std.option;
+
+func main() : int {
+    var: Map<int> m = map.new<int>(4);
+    map.put<int>(&m, "apple", 3);
+    map.put<int>(&m, "pear", 5);
+    var: Option<int> r = map.get<int>(&m, "apple");
+    if (r.isSome) {
+        io.printInt(r.value); io.println("");   // 3
+    }
+    var: bool has = map.contains<int>(&m, "pear");
+    map.destroy<int>(&m);
+    return 0;
+}
+```
+
+---
+
+# 注意事项
+
+- **`&&` / `||` 不做短路求值**（编译器按位求值再合并）。**禁止**写 `p != null && *p > 0` 或依赖短路保护内存访问的代码；请用嵌套 `if` 显式判断。
+- 非泛型 `pub` 函数的链接符号是裸函数名，跨包不能重名（如 `io.readChar` 与 `fs.readChar` 会冲突）；泛型函数实例化名带包前缀（`map.get<int>`）故安全。

@@ -1,0 +1,152 @@
+package std.fs;
+import std.mem;
+
+// PLang 标准库：文件系统（extern 直通 libc stdio）。
+// FILE* 句柄用 ptr 表示，打开失败返回 null。
+//
+// 常用模式（读取整个文件）：
+//   import std.fs; import std.mem; import std.string;
+//   var -> var: ptr data = fs.readAll("a.txt");
+//   if (data == null) { io.println("open failed"); return 1; }
+//   var: int n = string.len(data);
+//   mem.free(data);
+//
+// 文件打开模式 mode（同 C fopen）：
+//   "r" 读  "w" 写(截断)  "a" 追加  "rb"/"wb" 二进制  "r+"/"w+" 读写
+
+extern func fopen(var -> var: ptr path, var -> var: ptr mode) -> var: ptr;
+extern func fclose(var -> var: ptr fp) : int;
+extern func fread(var -> var: ptr buf, val: i64 size, val: i64 count, var -> var: ptr fp) : i64;
+extern func fwrite(var -> var: ptr buf, val: i64 size, val: i64 count, var -> var: ptr fp) : i64;
+extern func fgetc(var -> var: ptr fp) : int;
+extern func fputc(val: int c, var -> var: ptr fp) : int;
+extern func fputs(var -> var: ptr s, var -> var: ptr fp) : int;
+extern func fseek(var -> var: ptr fp, val: i64 offset, val: int origin) : int;
+extern func ftell(var -> var: ptr fp) : i64;
+extern func feof(var -> var: ptr fp) : int;
+extern func remove(var -> var: ptr path) : int;
+extern func rename(var -> var: ptr oldPath, var -> var: ptr newPath) : int;
+
+// 打开文件（失败返回 null）
+pub func openFile(var -> var: ptr path, var -> var: ptr mode) -> var: ptr {
+    return fopen(path, mode);
+}
+
+// 关闭文件，返回 0=成功
+pub func closeFile(var -> var: ptr fp) : int {
+    return fclose(fp);
+}
+
+// 读取 count 个 size 字节块到 buf，返回实际读取的块数
+pub func readBytes(var -> var: ptr buf, val: i64 size, val: i64 count, var -> var: ptr fp) : i64 {
+    return fread(buf, size, count, fp);
+}
+
+// 写入 count 个 size 字节块，返回实际写入的块数
+pub func writeBytes(var -> var: ptr buf, val: i64 size, val: i64 count, var -> var: ptr fp) : i64 {
+    return fwrite(buf, size, count, fp);
+}
+
+// 读一个字节，EOF 返回 -1
+pub func readByte(var -> var: ptr fp) : int {
+    return fgetc(fp);
+}
+
+// 写一个字节
+pub func writeByte(val: int c, var -> var: ptr fp) : int {
+    return fputc(c, fp);
+}
+
+// 写字符串（不含结束符），成功返回非负
+pub func writeStr(var -> var: ptr fp, var -> var: ptr s) : int {
+    return fputs(s, fp);
+}
+
+// 写字符串并换行
+pub func writeLine(var -> var: ptr fp, var -> var: ptr s) : int {
+    var: int r = fputs(s, fp);
+    fputc(10, fp);   // '\n'
+    return r;
+}
+
+// 定位。origin: 0=文件头, 1=当前位置, 2=文件尾
+pub func seek(var -> var: ptr fp, val: i64 offset, val: int origin) : int {
+    return fseek(fp, offset, origin);
+}
+
+// 当前位置（距文件头的字节数）
+pub func tell(var -> var: ptr fp) : i64 {
+    return ftell(fp);
+}
+
+// 是否到达文件尾
+pub func eof(var -> var: ptr fp) : bool {
+    return feof(fp) != 0;
+}
+
+// 文件总字节数（不改变当前位置）
+pub func size(var -> var: ptr fp) : i64 {
+    var: i64 cur = ftell(fp);
+    fseek(fp, 0, 2);
+    var: i64 n = ftell(fp);
+    fseek(fp, cur, 0);
+    return n;
+}
+
+// 删除文件，返回 0=成功
+pub func removeFile(var -> var: ptr path) : int {
+    return remove(path);
+}
+
+// 重命名/移动文件，返回 0=成功
+pub func renameFile(var -> var: ptr oldPath, var -> var: ptr newPath) : int {
+    return rename(oldPath, newPath);
+}
+
+// 文件是否存在（可打开）
+pub func exists(var -> var: ptr path) : bool {
+    var -> var: ptr fp = fopen(path, "rb");
+    if (fp == null) return false;
+    fclose(fp);
+    return true;
+}
+
+// 读取整个文件到堆缓冲（\0 结尾），失败返回 null。调用方 mem.free
+pub func readAll(var -> var: ptr path) -> var: ptr {
+    var -> var: ptr fp = fopen(path, "rb");
+    if (fp == null) return null;
+    fseek(fp, 0, 2);
+    var: i64 sz = ftell(fp);
+    fseek(fp, 0, 0);
+    if (sz < 0) {
+        fclose(fp);
+        return null;
+    }
+    var -> var: char buf = mem.malloc(sz + 1);
+    if (buf == null) {
+        fclose(fp);
+        return null;
+    }
+    var: int got = int as fread(buf, 1, sz, fp);
+    buf[got] = '\0';
+    fclose(fp);
+    return buf;
+}
+
+// 把字符串写入文件（覆盖），返回是否成功
+pub func writeAll(var -> var: ptr path, var -> var: ptr content) : bool {
+    var -> var: ptr fp = fopen(path, "w");
+    if (fp == null) return false;
+    var: int r = fputs(content, fp);
+    var: int rc = fclose(fp);
+    return r >= 0 && rc == 0;
+}
+
+// 把 buf 的前 n 字节写入文件（覆盖），返回是否成功
+pub func writeAllBytes(var -> var: ptr path, var -> var: ptr buf, val: i64 n) : bool {
+    var -> var: ptr fp = fopen(path, "wb");
+    if (fp == null) return false;
+    var: i64 w = fwrite(buf, 1, n, fp);
+    var: int rc = fclose(fp);
+    return w == n && rc == 0;
+}

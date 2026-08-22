@@ -1,0 +1,194 @@
+package std.buffer;
+import std.mem;
+
+// PLang 标准库：可变长字符缓冲（StringBuilder），用于逐步拼装字符串。
+// 用法：
+//   var: Buf b = buffer.new();
+//   buffer.append(&b, "x = ");
+//   buffer.appendInt(&b, 42);
+//   buffer.appendChar(&b, '\n');
+//   var -> var: ptr s = buffer.cstr(&b);   // 堆上 \0 结尾副本（调用方 mem.free）
+//   io.print(s);
+//   mem.free(s);
+//   buffer.destroy(&b);
+
+using Buf = struct {
+    pub var -> var: char data;   // 堆缓冲（\0 结尾）
+    pub val: int len;            // 当前字符数（不含 \0）
+    pub val: int cap;            // 容量（含 \0）
+};
+
+// 字符串长度（避免与 std.string.len 符号重名，内部自用）
+func bufLen(var -> var: char s) : int {
+    var: int n = 0;
+    while (s[n] != '\0') {
+        n = n + 1;
+    }
+    return n;
+}
+
+// 扩容到至少 need 字节（含 \0）
+func reserve(var -> var: Buf b, val: int need) {
+    if (need <= b.cap) return;
+    var: int newCap = b.cap;
+    while (newCap < need) {
+        newCap = newCap * 2;
+    }
+    var -> var: char nd = mem.malloc(newCap);
+    if (nd == null) return;
+    mem.memcpy(nd, b.data, b.len);
+    nd[b.len] = '\0';
+    mem.free(b.data);
+    b.data = nd;
+    b.cap = newCap;
+}
+
+// 创建空缓冲
+pub func new() -> Buf {
+    var -> var: char d = mem.malloc(16);
+    if (d == null) {
+        var: Buf e = {null, 0, 0};
+        return e;
+    }
+    d[0] = '\0';
+    var: Buf b = {d, 0, 16};
+    return b;
+}
+
+// 追加字符串
+pub func append(var -> var: Buf b, var -> var: char s) {
+    var: int n = bufLen(s);
+    reserve(b, b.len + n + 1);
+    if (b.data == null) return;
+    mem.memcpy(b.data + b.len, s, n);
+    b.len = b.len + n;
+    b.data[b.len] = '\0';
+}
+
+// 追加单个字符
+pub func appendChar(var -> var: Buf b, val: char c) {
+    reserve(b, b.len + 2);
+    if (b.data == null) return;
+    b.data[b.len] = c;
+    b.len = b.len + 1;
+    b.data[b.len] = '\0';
+}
+
+// 整数 → 十进制写入 buf（内部辅助），返回长度
+func intToBuf(val: int value, var -> var: char buf, val: int size) : int {
+    var: int i = 0;
+    var: int v = value;
+    var: bool neg = false;
+    if (v < 0) {
+        neg = true;
+        v = 0 - v;
+    }
+    if (v == 0) {
+        buf[i] = '0';
+        i = i + 1;
+    } else {
+        while (v > 0) {
+            buf[i] = char as (int as '0' + v % 10);
+            v = v / 10;
+            i = i + 1;
+        }
+    }
+    var: int j = 0;
+    while (j < i / 2) {
+        var: char tmp = buf[j];
+        buf[j] = buf[i - 1 - j];
+        buf[i - 1 - j] = tmp;
+        j = j + 1;
+    }
+    if (neg) {
+        var: int k = i;
+        while (k > 0) {
+            buf[k] = buf[k - 1];
+            k = k - 1;
+        }
+        buf[0] = '-';
+        i = i + 1;
+    }
+    buf[i] = '\0';
+    return i;
+}
+
+// 追加整数（十进制）
+pub func appendInt(var -> var: Buf b, val: int n) {
+    var: char[32] buf;
+    var: int nb = intToBuf(n, &buf, 32);
+    append(b, &buf);
+}
+
+// 浮点 → 十进制写入 buf（固定 6 位小数），返回长度
+func floatToBuf(val: f64 value, var -> var: char buf, val: int size) : int {
+    var: f64 v = value;
+    var: bool neg = false;
+    if (v < 0.0) {
+        neg = true;
+        v = 0.0 - v;
+    }
+    var: int ip = int as v;
+    var: int len0 = intToBuf(ip, buf, size);
+    buf[len0] = '.';
+    len0 = len0 + 1;
+    var: f64 frac = v - int as ip;
+    var: int fracInt = int as (frac * 1000000.0 + 0.5);
+    var: int d = 100000;
+    while (d > 0) {
+        buf[len0] = char as (int as '0' + fracInt / d % 10);
+        d = d / 10;
+        len0 = len0 + 1;
+    }
+    if (neg) {
+        var: int k = len0;
+        while (k > 0) {
+            buf[k] = buf[k - 1];
+            k = k - 1;
+        }
+        buf[0] = '-';
+        len0 = len0 + 1;
+    }
+    buf[len0] = '\0';
+    return len0;
+}
+
+// 追加浮点数（固定 6 位小数）
+pub func appendFloat(var -> var: Buf b, val: f64 f) {
+    var: char[64] buf;
+    var: int nb = floatToBuf(f, &buf, 64);
+    append(b, &buf);
+}
+
+// 清空（不释放内存）
+pub func clear(var -> var: Buf b) {
+    if (b.data != null) {
+        b.data[0] = '\0';
+    }
+    b.len = 0;
+}
+
+// 取堆上 \0 结尾副本（调用方 free）；失败返回 null
+pub func cstr(var -> var: Buf b) -> var: ptr {
+    if (b.data == null) return null;
+    var -> var: char out = mem.malloc(b.len + 1);
+    if (out == null) return null;
+    mem.memcpy(out, b.data, b.len);
+    out[b.len] = '\0';
+    return out;
+}
+
+// 内部缓冲指针（借用，不释放）
+pub func data(var -> var: Buf b) -> var: ptr {
+    return b.data;
+}
+
+// 释放堆内存
+pub func destroy(var -> var: Buf b) {
+    if (b.data != null) {
+        mem.free(b.data);
+        b.data = null;
+    }
+    b.len = 0;
+    b.cap = 0;
+}
