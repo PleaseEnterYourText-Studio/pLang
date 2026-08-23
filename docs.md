@@ -404,8 +404,8 @@ var: int r = addOff(5);   // 15
 func applyTwice(var: Closure f, val: int n) : int { return f(f(n)); }
 var: int t = applyTwice(addOff, 1);   // (1+10)+10 = 21
 ```
-限制：捕获按值（闭包内修改不影响原变量）；环境由闭包持有，需在合适时机释放
-（当前由调用方管理）；闭包作为参数传递时返回类型未跟踪，建议返回 `int`。
+限制：捕获按值（闭包内修改不影响原变量）；闭包作为参数传递时返回类型可任意
+（int/f64 等均已支持）；捕获环境为堆内存，需由调用方管理释放。
 
 ### RAII：construction / destroy
 变量声明后自动调用 `.construction`，作用域退出时逆序调用 `.destroy`：
