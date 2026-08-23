@@ -107,6 +107,12 @@ private:
     void visitContinue(ContinueStmtNode* node);
     std::string structWithOperator(const std::string& leftType, const std::string& rightType,
                                    const std::string& opName) const;
+    // 函数重载
+    void resolveOverloads(std::vector<std::unique_ptr<ASTNode>>& decls);
+    std::string functionSignature(FunctionDeclNode* fn);
+    FunctionDeclNode* resolveOverload(const std::string& rawName,
+                                      const std::vector<std::string>& argTypes);
+    std::unordered_map<std::string, std::vector<FunctionDeclNode*>> overloadCandidates;
     void visitSwitch(SwitchStmtNode* node);
     void visitReturn(ReturnStmtNode* node);
     void visitExprStmt(ExpressionStmtNode* node);

@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
 #include "../include/Sema.h"
 #include "../include/TypeSystem.h"
 
@@ -30,6 +31,75 @@ bool Sema::analyze(std::unique_ptr<ProgramNode>& program)
 
 // 顶层
 
+// 参数类型的详细签名（指针带指向类型，避免 var -> var: int 与 var -> var: char 混淆）
+std::string Sema::functionSignature(FunctionDeclNode* fn)
+{
+    std::string sig;
+    for (auto& p : fn->params)
+    {
+        if (!sig.empty()) sig += "$";
+        sig += p->type ? typeNodeToName(p->type.get()) : "?";
+    }
+    return sig;
+}
+
+// 预扫描函数重载：同名多定义时把 decl 名字改写为 mangled 名（name$paramtypes）
+void Sema::resolveOverloads(std::vector<std::unique_ptr<ASTNode>>& decls)
+{
+    overloadCandidates.clear();
+    std::unordered_map<std::string, std::map<std::string, int>> nameSigs;
+    for (auto& decl : decls)
+    {
+        if (decl->type != ASTNodeType::FUNCTION_DECL) continue;
+        auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+        if (!fn->typeParams.empty() || fn->isExtern) continue;  // 泛型/FFI 不参与重载
+        nameSigs[fn->name][functionSignature(fn)]++;
+    }
+    for (auto& decl : decls)
+    {
+        if (decl->type != ASTNodeType::FUNCTION_DECL) continue;
+        auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+        if (!fn->typeParams.empty() || fn->isExtern) continue;
+        if (nameSigs[fn->name].size() > 1)
+        {
+            fn->name = fn->name + "$" + functionSignature(fn);
+        }
+        overloadCandidates[fn->name.substr(0, fn->name.find('$'))].push_back(fn);
+    }
+}
+
+// 调用点重载解析：按实参类型挑选最匹配的定义，返回其（mangled）名字
+FunctionDeclNode* Sema::resolveOverload(const std::string& rawName,
+                                        const std::vector<std::string>& argTypes)
+{
+    auto it = overloadCandidates.find(rawName);
+    if (it == overloadCandidates.end()) return nullptr;
+    // 候选记录名字去掉 mangled 后缀，用于打印
+    FunctionDeclNode* exact = nullptr;
+    FunctionDeclNode* widening = nullptr;
+    for (auto* fn : it->second)
+    {
+        bool allMatch = true;
+        bool allExact = true;
+        for (size_t i = 0; i < fn->params.size(); ++i)
+        {
+            std::string want = fn->params[i]->type ? typeNodeToName(fn->params[i]->type.get()) : "";
+            if (i >= argTypes.size()) { allMatch = false; break; }
+            if (argTypes[i].empty()) continue;
+            if (argTypes[i] == want) continue;
+            allExact = false;
+            if (!isCompatible(argTypes[i], want)) { allMatch = false; break; }
+        }
+        if (fn->params.size() != argTypes.size()) allMatch = false;
+        if (allMatch)
+        {
+            if (allExact) return fn;
+            if (!widening) widening = fn;
+        }
+    }
+    return widening ? widening : nullptr;
+}
+
 void Sema::visitProgram(ProgramNode* node)
 {
     if (node->packageName.empty())
@@ -49,6 +119,10 @@ void Sema::visitProgram(ProgramNode* node)
     }
 
     // 第一阶段：收集所有顶层声明（函数/结构体），允许前向引用
+
+    // 0) 函数重载预扫描：同名的多个定义按参数类型区分，改名为 mangled 名
+    resolveOverloads(node->decls);
+
     for (auto& decl : node->decls)
     {
         if (decl->type == ASTNodeType::FUNCTION_DECL)
@@ -1226,8 +1300,7 @@ std::string Sema::visitExpr(ASTNode* node)
 
 // 运算符重载：二元运算符 → 方法名（返回空串表示不支持）
 static const char* binaryOpMethodName(BinaryOpType op)
-{
-    switch (op) {
+{    switch (op) {
         case BinaryOpType::ADD: return "opAdd";
         case BinaryOpType::SUB: return "opSub";
         case BinaryOpType::MUL: return "opMul";
@@ -1379,6 +1452,21 @@ std::string Sema::visitCall(FunctionCallNode* node)
             for (auto& a : node->arguments) visitExpr(a.get());
             return "";
         }
+    }
+
+    // 函数重载解析：同名不同参，按实参类型匹配并改写为 mangled 名
+    if (overloadCandidates.count(node->name))
+    {
+        std::vector<std::string> argTypes;
+        for (auto& a : node->arguments) argTypes.push_back(visitExpr(a.get()));
+        FunctionDeclNode* chosen = resolveOverload(node->name, argTypes);
+        if (!chosen)
+        {
+            error(node->line, node->column, "no matching overload for '" + node->name + "'");
+            for (auto& a : node->arguments) visitExpr(a.get());
+            return "";
+        }
+        node->name = chosen->name;
     }
 
     // std.thread 编译器内置调用（仅 spawn / sleep / mutex.create；其余为 std.thread 源码库函数）
