@@ -106,16 +106,28 @@ std::string plangGetStdlibRoot(const std::string& exePath)
     return exeAbs.parent_path().parent_path().string();
 }
 
-// 用户包根（pvp 安装的第三方包）：PLANG_PVP 覆盖，否则 ~/Library/Python/<版本>/lib/pLang/pvp
+// 用户包根（pvp 安装的第三方包）：PLANG_PVP 覆盖，否则各平台用户数据目录
 std::string plangGetPvpRoot()
 {
     if (const char* env = std::getenv("PLANG_PVP"))
     {
         return env;
     }
-    const char* home = std::getenv("HOME");
-    if (!home) return "";
-    return std::string(home) + "/Library/Python/0.x/lib/pLang/pvp";
+#if defined(_WIN32)
+    if (const char* la = std::getenv("LOCALAPPDATA"))
+        return std::string(la) + "\\pLang\\0.x\\packages";
+    if (const char* up = std::getenv("USERPROFILE"))
+        return std::string(up) + "\\AppData\\Local\\pLang\\0.x\\packages";
+#elif defined(__APPLE__)
+    if (const char* home = std::getenv("HOME"))
+        return std::string(home) + "/Library/Application Support/pLang/0.x/packages";
+#else
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"))
+        if (*xdg) return std::string(xdg) + "/pLang/0.x/packages";
+    if (const char* home = std::getenv("HOME"))
+        return std::string(home) + "/.local/share/pLang/0.x/packages";
+#endif
+    return "";
 }
 
 // 深拷贝 TypeNode

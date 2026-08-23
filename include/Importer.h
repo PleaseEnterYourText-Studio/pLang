@@ -15,7 +15,7 @@ bool plangParseSourceFile(const std::string& filename, std::unique_ptr<ProgramNo
 // 标准库根目录：import std.thread 对应 <root>/std/thread
 std::string plangGetStdlibRoot(const std::string& exePath);
 
-// 用户包根（pvp 安装的第三方包）：PLANG_PVP 覆盖，否则 ~/Library/Python/<版本>/lib/pLang/pvp
+// 用户包根（pvp 安装的第三方包）：PLANG_PVP 覆盖，否则各平台用户数据目录
 std::string plangGetPvpRoot();
 
 // 解析 import：库包函数注入 extern 声明、结构体/类型合并进宿主程序（带环检测）。
