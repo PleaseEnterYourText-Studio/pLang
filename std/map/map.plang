@@ -137,7 +137,6 @@ pub func put<T: type>(var -> var: Map<T> m, var -> var: char key, val: T v) {
 }
 
 // 取值。未找到时 isSome=false（value 无效）
-// 注意：编译器 && 不做短路求值，探测必须用嵌套 if，避免对空槽/墓碑槽调用 string.eq
 pub func get<T: type>(var -> var: Map<T> m, var -> var: char key) -> Option<T> {
     var: int idx = hash(key) & (m.cap - 1);
     var: int i = 0;

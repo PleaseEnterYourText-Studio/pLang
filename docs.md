@@ -1,8 +1,9 @@
 # PLang 语言文档
 
 > **实现状态**：本文为语言设计文档。已实现：指针/数组、结构体/联合/位域/对齐、泛型结构体与泛型函数、sizeof、RAII（construction/destroy）、
-> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector/string/sqlite）。
-> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、模板函数自动生成、`?` 错误传播。
+> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector/string/sqlite/fs/buffer/map）。
+> `&&`/`||` 短路求值、`break`/`continue`、`enum` 枚举、函数重载、运算符重载（opAdd/opEq 等）、闭包 `lambda`（按值捕获）。
+> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、模板函数自动生成、`?` 错误传播、完整借用规则。
 > 编译器：LLVM 优化（-O0~-O3）、DWARF 调试信息、错误恢复、独立编译单元、LSP（悬停/补全/跳转/重命名）。
 > 标准库通过 `import std.xxx` 独立编译为 `.o` 并与用户程序链接，见 `stdlib.md`。
 
@@ -72,7 +73,9 @@ val: string userName = "plang";
 - `this` `thisType`: 当前实例与自身类型.
 - `type`: 模板类型参数.
 - `as`: 强制类型转换.
-- `if` `else` `while` `for`: 流程控制.
+- `if` `else` `while` `for` `break` `continue`: 流程控制.
+- `enum`: 枚举类型.
+- `lambda`: 闭包表达式.
 - `int` `char` `string` 等内置类型名: 见`类型系统`.
 
 
@@ -332,6 +335,77 @@ sizeof(int)      // 4
 sizeof(i64)      // 8
 sizeof(Box<int>) // 4
 ```
+
+### break / continue
+`while`/`for` 循环内使用；`break` 跳出当前循环，`continue` 跳到更新/条件处。
+```plang
+var: int sum = 0;
+var: int i = 0;
+while (i < 10) {
+    i = i + 1;
+    if (i % 2 == 0) continue;   // 跳过偶数
+    if (i > 7) break;           // i=8 停止
+    sum = sum + i;              // 1+3+5+7 = 16
+}
+```
+
+### && / || 短路求值
+`a && b` 在 `a` 为假时不求值 `b`，`a || b` 在 `a` 为真时不求值 `b`。可安全写出
+`p != null && *p > 0` 这类依赖短路的守卫代码。
+
+### enum 枚举
+C 风格整型常量类型，变体自动递增、可显式赋值、可裸用或限定访问：
+```plang
+enum Color { RED, GREEN, BLUE = 10, CYAN }
+var: Color c = GREEN;              // 1
+var: bool r = (c == Color.RED);    // false
+switch (c) { case 1: ... }         // 按整数值
+```
+枚举类型按 `int` 处理（可与整数运算/比较/switch）。
+
+### 函数重载
+同名函数按参数类型区分，调用时按实参类型匹配（精确优先，其次隐式转换）：
+```plang
+func printVal(val: int n) { ... }
+func printVal(val: f64 f) { ... }
+func printVal(val: string s) { ... }
+printVal(42);     // int 版本
+printVal(3.14);   // f64 版本
+printVal("hi");   // string 版本
+```
+
+### 运算符重载
+结构体定义 `opAdd`/`opSub`/`opMul`/`opDiv`/`opMod`/`opEq`/`opNe`/`opLt`/`opLe`/`opGt`/`opGe`
+方法后，`a + b`、`c == d` 自动派发到对应方法（操作数传地址）：
+```plang
+using Vec2 = struct {
+    pub val: f64 x;
+    pub val: f64 y;
+    pub func opAdd(var -> var: Vec2 other) : Vec2 {
+        var: Vec2 r = {this.x + other.x, this.y + other.y};
+        return r;
+    }
+    pub func opEq(var -> var: Vec2 other) : bool {
+        return this.x == other.x && this.y == other.y;
+    }
+};
+var: Vec2 c = a + b;   // 调用 a.opAdd(&b)
+if (c == d) { ... }    // 调用 c.opEq(&d)
+```
+
+### 闭包 lambda
+`lambda (val: int a) : int { ... }` 生成闭包值（内置 `Closure` 类型 = {函数指针, 捕获环境}）。
+捕获的外层变量**按值复制**进堆上环境；闭包可赋值给变量、作参数传递、嵌套调用：
+```plang
+var: int offset = 10;
+var: Closure addOff = lambda (val: int x) : int { return x + offset; };
+var: int r = addOff(5);   // 15
+
+func applyTwice(var: Closure f, val: int n) : int { return f(f(n)); }
+var: int t = applyTwice(addOff, 1);   // (1+10)+10 = 21
+```
+限制：捕获按值（闭包内修改不影响原变量）；环境由闭包持有，需在合适时机释放
+（当前由调用方管理）；闭包作为参数传递时返回类型未跟踪，建议返回 `int`。
 
 ### RAII：construction / destroy
 变量声明后自动调用 `.construction`，作用域退出时逆序调用 `.destroy`：
