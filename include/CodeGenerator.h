@@ -41,6 +41,7 @@ private:
     std::unordered_map<std::string, long long> enumConstValues;           // enum 变体名 → 常量值
     // 闭包变量/参数名 → lambda 函数 LLVM 类型（调用闭包时按此签名位转换）
     std::unordered_map<std::string, llvm::FunctionType*> closureSigOf;
+    std::unordered_map<std::string, FunctionDeclNode*> funcDeclOf;   // 函数名 → 声明（参数名传播用）
     std::set<std::string> volatileVars;   // volatile 变量（访问走 volatile load/store）
 
     // std.thread 内置支持

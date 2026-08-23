@@ -538,7 +538,8 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                     llvm::Value* envGep = builder.CreateStructGEP(cloTy, cIt->second.ptr, 1, "clo.env");
                     llvm::Value* envPtr = builder.CreateLoad(ptrTy, envGep, "cenv");
                     llvm::FunctionType* clof = nullptr;
-                    auto sigIt = closureSigOf.find(call->name);
+                    auto sigIt = closureSigOf.find(
+                        (currentFunction ? currentFunction->getName().str() : "") + "." + call->name);
                     if (sigIt != closureSigOf.end()) clof = sigIt->second;
                     // 生成实参并取类型
                     std::vector<llvm::Value*> args;
@@ -591,12 +592,15 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
                         call->arguments[i]->type == ASTNodeType::VARIABLE_REF)
                     {
                         auto* ref = static_cast<VariableRefNode*>(call->arguments[i].get());
-                        auto sigIt = closureSigOf.find(ref->name);
+                        auto sigIt = closureSigOf.find(
+                            (currentFunction ? currentFunction->getName().str() : "") + "." + ref->name);
                         if (sigIt != closureSigOf.end())
                         {
-                            auto pIt = func->args().begin();
-                            std::advance(pIt, i);
-                            closureSigOf[pIt->getName().str()] = sigIt->second;
+                            auto dIt = funcDeclOf.find(call->name);
+                            if (dIt != funcDeclOf.end() && i < dIt->second->params.size())
+                            {
+                                closureSigOf[call->name + "." + dIt->second->params[i]->name] = sigIt->second;
+                            }
                         }
                     }
                     llvm::Value* v = generateExpression(call->arguments[i].get());
@@ -733,7 +737,8 @@ void CodeGenerator::generateStatement(ASTNode* node)
                 for (auto& p : lam->params) pTys.push_back(getLLVMType(p->type.get()));
                 llvm::Type* rTy = lam->returnType
                     ? getLLVMType(lam->returnType.get()) : llvm::Type::getInt32Ty(context);
-                closureSigOf[decl->name] = llvm::FunctionType::get(rTy, pTys, false);
+                closureSigOf[currentFunction->getName().str() + "." + decl->name] =
+                    llvm::FunctionType::get(rTy, pTys, false);
             }
 
             if (decl->initializer) {
@@ -1231,6 +1236,7 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
         if (paramIdx < fn->params.size())
         {
             auto* param = fn->params[paramIdx].get();
+            if (arg.getName().empty()) arg.setName(param->name);
             llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, param->name);
             builder.CreateStore(&arg, alloca);
             namedValues[param->name] = VarInfo{alloca, arg.getType()};
@@ -1644,34 +1650,42 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
         if (decl->type == ASTNodeType::FUNCTION_DECL)
         {
             auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
-            if (!fn->typeParams.empty()) continue; // 泛型函数模板：实例化后按 mangled 名生成
             if (fn->name != "main")
             {
-                if (fn->body)
-                {
-                    generateFunction(fn);
+                // 无函数体（extern FFI 或待 impl 的声明）：仅 emit 外部声明
+                llvm::Type* retType = llvm::Type::getInt32Ty(context);
+                if (fn->returnType) {
+                    retType = getLLVMType(fn->returnType.get());
                 }
-                else
-                {
-                    // 无函数体（extern FFI 或待 impl 的声明）：仅 emit 外部声明
-                    llvm::Type* retType = llvm::Type::getInt32Ty(context);
-                    if (fn->returnType) {
-                        retType = getLLVMType(fn->returnType.get());
-                    }
-                    std::vector<llvm::Type*> paramTypes;
-                    for (auto& param : fn->params) {
-                        paramTypes.push_back(getLLVMType(param->type.get()));
-                    }
-                    llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, fn->isVariadic);
-                    if (!module->getFunction(fn->name)) {
-                        llvm::Function::Create(ft, llvm::Function::ExternalLinkage, fn->name, module.get());
-                    }
+                std::vector<llvm::Type*> paramTypes;
+                for (auto& param : fn->params) {
+                    paramTypes.push_back(getLLVMType(param->type.get()));
+                }
+                llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, fn->isVariadic);
+                if (!module->getFunction(fn->name)) {
+                    llvm::Function::Create(ft, llvm::Function::ExternalLinkage, fn->name, module.get());
                 }
             }
         }
     }
 
-    // main 函数作为入口（库包不生成）
+    // 预声明所有函数签名（main 先生成体时被调函数类型正确）
+    for (auto& decl : root->decls)
+    {
+        if (decl->type != ASTNodeType::FUNCTION_DECL) continue;
+        auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+        if (!fn->typeParams.empty() || fn->name == "main") continue;
+        funcDeclOf[fn->name] = fn;
+        llvm::Type* retType = llvm::Type::getInt32Ty(context);
+        if (fn->returnType) retType = getLLVMType(fn->returnType.get());
+        std::vector<llvm::Type*> paramTypes;
+        for (auto& param : fn->params) paramTypes.push_back(getLLVMType(param->type.get()));
+        llvm::FunctionType* ft = llvm::FunctionType::get(retType, paramTypes, fn->isVariadic);
+        if (!module->getFunction(fn->name))
+            llvm::Function::Create(ft, llvm::Function::ExternalLinkage, fn->name, module.get());
+    }
+
+    // main 函数作为入口（库包不生成）：先生成 main 体（闭包签名传播先于被调函数体）
     if (emitMain)
     {
     llvm::FunctionType* mainType = llvm::FunctionType::get(
@@ -1708,6 +1722,15 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
     if (!builder.GetInsertBlock()->getTerminator()) {
         builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0)));
     }
+    }
+
+    // 生成其余函数体（main 之后；签名已预声明，前向引用/闭包签名传播均正确）
+    for (auto& decl : root->decls)
+    {
+        if (decl->type != ASTNodeType::FUNCTION_DECL) continue;
+        auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+        if (!fn->typeParams.empty() || fn->name == "main") continue;
+        if (fn->body) generateFunction(fn);
     }
 
     // 收尾 DWARF

@@ -141,6 +141,7 @@ void Sema::visitProgram(ProgramNode* node)
             for (auto& p : funcNode->params)
             {
                 sym->paramTypes.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+                sym->paramNames.push_back(p->name);
             }
             sym->packageName = funcNode->packageName;
             sym->isPub = funcNode->isPub;
@@ -281,9 +282,24 @@ void Sema::visitProgram(ProgramNode* node)
     }
 
     // 第二阶段：检查函数体（index 循环：泛型实例化会向 decls 追加声明）
+    // main 优先分析：闭包实参→形参的返回类型在 main 内传播，先于被调函数体分析
     symbols.pushScope();
+    bool mainSeen = false;
     for (size_t i = 0; i < node->decls.size(); ++i)
     {
+        if (node->decls[i]->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(node->decls[i].get());
+            if (fn->name == "main") { mainSeen = true; visitDecl(node->decls[i].get()); }
+        }
+    }
+    for (size_t i = 0; i < node->decls.size(); ++i)
+    {
+        if (mainSeen && node->decls[i]->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(node->decls[i].get());
+            if (fn->name == "main") continue;
+        }
         visitDecl(node->decls[i].get());
     }
     symbols.popScope();
@@ -1038,11 +1054,11 @@ void Sema::visitVarDecl(VariableDeclNode* node)
     if (node->initializer)
     {
         initType = visitExpr(node->initializer.get());
-        // 闭包变量：记录返回类型供调用点使用
+        // 闭包变量：记录返回类型供调用点使用（复合键 函数.变量，避免跨函数同名冲突）
         if (declaredType == "Closure" && node->initializer->type == ASTNodeType::LAMBDA_EXPR)
         {
             auto* lam = static_cast<LambdaExprNode*>(node->initializer.get());
-            closureReturnTypes[node->name] =
+            closureReturnTypes[currentFunctionName + "." + node->name] =
                 lam->returnType ? typeNodeToName(lam->returnType.get()) : "int";
         }
     }
@@ -1682,7 +1698,7 @@ std::string Sema::visitCall(FunctionCallNode* node)
         if (sym->typeName == "Closure")
         {
             for (auto& a : node->arguments) visitExpr(a.get());
-            auto rt = closureReturnTypes.find(node->name);
+            auto rt = closureReturnTypes.find(currentFunctionName + "." + node->name);
             return (rt != closureReturnTypes.end()) ? rt->second : "int";
         }
         if (isFuncPtr)
@@ -1726,6 +1742,17 @@ std::string Sema::visitCall(FunctionCallNode* node)
     for (size_t i = 0; i < node->arguments.size() && i < sym->paramTypes.size(); ++i)
     {
         std::string argType = visitExpr(node->arguments[i].get());
+        // 闭包实参 → 闭包形参：传播返回类型（键 = 被调函数.参数名）
+        if (sym->paramTypes[i] == "Closure" && i < sym->paramNames.size() &&
+            node->arguments[i]->type == ASTNodeType::VARIABLE_REF)
+        {
+            auto* ref = dynamic_cast<VariableRefNode*>(node->arguments[i].get());
+            auto rt = closureReturnTypes.find(currentFunctionName + "." + ref->name);
+            if (rt != closureReturnTypes.end())
+            {
+                closureReturnTypes[node->name + "." + sym->paramNames[i]] = rt->second;
+            }
+        }
         if (!argType.empty() && !sym->paramTypes[i].empty())
         {
             if (!isCompatible(argType, sym->paramTypes[i]))

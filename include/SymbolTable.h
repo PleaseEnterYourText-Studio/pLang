@@ -33,6 +33,7 @@ struct Symbol
     int column;
     std::string returnType;         // 函数返回类型
     std::vector<std::string> paramTypes;  // 函数参数类型
+    std::vector<std::string> paramNames;  // 函数参数名
     std::string packageName;        // 所属包（如 "std.thread"）
     bool isPub;                     // 跨包可见
     bool isExtern;                  // extern FFI 声明
