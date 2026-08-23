@@ -16,6 +16,34 @@ package foo;
 ```
 `impl` 仅在同一包内生效, 跨包无法扩展结构体的实现.
 
+## 项目构建管理（pLangLists.json）
+类似 CMakeLists.txt 的项目清单：目录内放 `pLangLists.json` 声明构建配置，
+`plc build/run/clean/init` 驱动构建。
+
+```json
+{
+  "name": "demo",              // 项目名（默认输出文件名）
+  "version": "0.1.0",
+  "kind": "executable",        // executable | library（产出 .a）
+  "entry": "demo.plang",       // 入口源文件（executable）
+  "sources": ["util.plang"],   // 额外源文件；留空自动收集目录内 *.plang
+  "output": "demo",            // 输出文件名（默认 name）
+  "optimization": 2,           // -O0~-O3
+  "link": { "libraries": ["sqlite3"] },  // 额外链接库（-l）
+  "import": []                 // 第三方 import 根（后续启用）
+}
+```
+
+命令：
+```
+plc init <name>     # 生成 pLangLists.json + 入口文件模板
+plc build [dir]     # 按清单编译并链接（可执行或静态库）
+plc run [dir] [args]  # 构建并运行
+plc clean [dir]     # 清理构建产物
+```
+
+`import` 字段预留第三方包搜索根，待包管理功能启用。
+
 ## 包的引用
 使用 `import` 引入其他包的符号:
 ```plang

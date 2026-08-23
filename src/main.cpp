@@ -16,6 +16,7 @@
 #endif
 #include <set>
 #include <filesystem>
+#include "llvm/Support/JSON.h"
 #include "Lexer.h"
 #include "Parser.h"
 #include "Sema.h"
@@ -87,7 +88,8 @@ std::vector<std::string> collectPlangFiles(const std::vector<std::string>& input
 }
 
 // 链接可执行文件
-bool linkExecutable(const std::vector<std::string>& objFiles, const std::string& exePath, bool needSqlite) {
+bool linkExecutable(const std::vector<std::string>& objFiles, const std::string& exePath, bool needSqlite,
+                    const std::vector<std::string>& extraLibs = {}) {
     if (objFiles.empty()) {
         std::cerr << "error: no object files to link\n";
         return false;
@@ -99,17 +101,20 @@ bool linkExecutable(const std::vector<std::string>& objFiles, const std::string&
     cmd = "clang -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
     if (needSqlite) cmd += " -lsqlite3";
+    for (const auto& lib : extraLibs) cmd += " -l" + lib;
 #elif defined(__linux__)
     // Linux 需要 crt 文件，用 gcc 驱动更简单；多线程需要链接 pthread
     cmd = "g++ -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
     cmd += " -pthread";
     if (needSqlite) cmd += " -lsqlite3";
+    for (const auto& lib : extraLibs) cmd += " -l" + lib;
 #elif defined(_WIN32)
     // Windows：用 clang 驱动（自动处理 CRT 与入口），对象文件 .obj
     cmd = "clang++ -o " + exePath;
     for (const auto& obj : objFiles) cmd += " " + obj;
     if (needSqlite) cmd += " -lsqlite3";
+    for (const auto& lib : extraLibs) cmd += " -l" + lib;
 #else
     std::cerr << "error: unsupported platform for linking\n";
     return false;
@@ -555,6 +560,225 @@ bool buildStaticLibrary(const std::vector<std::string>& objFiles,
     return std::system(cmd.c_str()) == 0;
 }
 
+// ============ pLangLists.json 构建管理系统 ============
+// 类似 CMakeLists.txt：项目清单定义入口/源文件/输出/优化/链接库，
+// plc build / run / clean / init 驱动构建。
+
+struct Manifest
+{
+    std::string name;
+    std::string version;
+    std::string kind = "executable";     // executable | library
+    std::string entry;                   // 入口源文件（executable）
+    std::vector<std::string> sources;    // 额外源文件
+    std::string output;                  // 输出文件名（默认 name）
+    int optimization = 2;
+    std::vector<std::string> linkLibraries;
+    std::vector<std::string> imports;    // 第三方 import 根（后续启用）
+};
+
+// 读取并解析 pLangLists.json（目录内），成功返回 true
+bool parseManifest(const std::string& dir, Manifest& m)
+{
+    fs::path manifestPath = fs::path(dir) / "pLangLists.json";
+    std::ifstream file(manifestPath);
+    if (!file.is_open()) return false;
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    auto parsed = llvm::json::parse(buffer.str());
+    if (!parsed) return false;
+    auto* obj = parsed->getAsObject();
+    if (!obj) return false;
+
+    if (auto s = obj->getString("name")) m.name = s->str();
+    if (auto s = obj->getString("version")) m.version = s->str();
+    if (auto s = obj->getString("kind")) m.kind = s->str();
+    if (auto s = obj->getString("entry")) m.entry = s->str();
+    if (auto s = obj->getString("output")) m.output = s->str();
+    if (auto i = obj->getInteger("optimization")) m.optimization = (int)*i;
+    if (auto arr = obj->getArray("sources"))
+    {
+        for (auto& e : *arr)
+            if (auto s = e.getAsString()) m.sources.push_back(s->str());
+    }
+    if (auto lk = obj->getObject("link"))
+    {
+        if (auto arr = lk->getArray("libraries"))
+            for (auto& e : *arr)
+                if (auto s = e.getAsString()) m.linkLibraries.push_back(s->str());
+    }
+    if (auto arr = obj->getArray("import"))
+    {
+        for (auto& e : *arr)
+            if (auto s = e.getAsString()) m.imports.push_back(s->str());
+    }
+    return true;
+}
+
+// 输出文件名（无则默认 name）
+static std::string manifestOutput(const Manifest& m)
+{
+    return m.output.empty() ? (m.name.empty() ? "output" : m.name) : m.output;
+}
+
+// 收集源文件：entry + sources；未指定则收集目录内全部 .plang
+static std::vector<std::string> manifestSources(const Manifest& m, const std::string& dir)
+{
+    std::vector<std::string> out;
+    std::vector<std::string> explicitList;
+    if (!m.entry.empty()) explicitList.push_back(m.entry);
+    for (auto& s : m.sources) explicitList.push_back(s);
+    for (auto& s : explicitList)
+    {
+        fs::path p = s;
+        if (!p.is_absolute()) p = fs::path(dir) / p;
+        if (fs::exists(p)) out.push_back(p.string());
+        else std::cerr << "warning: source not found: " << p.string() << "\n";
+    }
+    if (out.empty())
+    {
+        // 自动收集目录内 .plang
+        for (const auto& entry : fs::directory_iterator(dir))
+            if (entry.path().extension() == ".plang") out.push_back(entry.path().string());
+    }
+    return out;
+}
+
+// 打印构建概要
+static void printManifestSummary(const Manifest& m, const std::string& dir)
+{
+    std::cout << "pLangLists.json: " << fs::path(dir).filename().string() << "/pLangLists.json\n";
+    std::cout << "  name = " << (m.name.empty() ? "(unnamed)" : m.name)
+              << "  kind = " << m.kind
+              << "  optimization = -O" << m.optimization << "\n";
+    if (!m.version.empty()) std::cout << "  version = " << m.version << "\n";
+    if (!m.entry.empty()) std::cout << "  entry = " << m.entry << "\n";
+}
+
+// plc build / plc run：按清单编译并链接
+int cmdBuild(const std::string& dir, bool runAfter, const std::vector<std::string>& runArgs,
+             const char* argv0)
+{
+    Manifest m;
+    if (!parseManifest(dir, m))
+    {
+        std::cerr << "error: no pLangLists.json in '" << dir << "' (run 'plc init <name>' first)\n";
+        return 1;
+    }
+    printManifestSummary(m, dir);
+
+    std::vector<std::string> sources = manifestSources(m, dir);
+    if (sources.empty())
+    {
+        std::cerr << "error: no .plang sources (set entry/sources or add .plang files)\n";
+        return 1;
+    }
+
+    std::string stdlibRoot = getStdlibRoot(argv0);
+    std::string obj = "plangc_tmp_0.o";
+    std::vector<std::string> extraObjs;
+    bool needSqlite = false;
+    if (!compileUnit(sources, false, obj, stdlibRoot, m.optimization, extraObjs, needSqlite))
+        return 1;
+    std::vector<std::string> objFiles = { obj };
+    for (auto& eo : extraObjs) objFiles.push_back(eo);
+
+    int result = 1;
+    if (m.kind == "library")
+    {
+        std::string libName = manifestOutput(m);
+        std::cout << "archiving " << objFiles.size() << " object(s) -> " << libName << "\n";
+        result = buildStaticLibrary(objFiles, libName) ? 0 : 1;
+    }
+    else
+    {
+        std::string exeName = fs::path(dir) / manifestOutput(m);
+        std::cout << "linking -> " << exeName << "\n";
+        result = linkExecutable(objFiles, exeName, needSqlite, m.linkLibraries) ? 0 : 1;
+        if (result == 0 && runAfter)
+        {
+            std::string cmd = "\"" + exeName + "\"";
+            for (auto& a : runArgs) cmd += " \"" + a + "\"";
+            std::cout << "running: " << exeName << "\n";
+            result = (std::system(cmd.c_str()) == 0) ? 0 : 1;
+        }
+    }
+
+    // 清理临时 .o
+    for (const auto& o : objFiles) fs::remove(o);
+    return result;
+}
+
+// plc clean：清理构建产物（可执行/静态库）
+int cmdClean(const std::string& dir)
+{
+    Manifest m;
+    if (!parseManifest(dir, m))
+    {
+        std::cerr << "error: no pLangLists.json in '" << dir << "'\n";
+        return 1;
+    }
+    std::string out = fs::path(dir) / manifestOutput(m);
+    int removed = 0;
+    for (const auto& candidate : { out, out + ".a", out + ".dSYM" })
+    {
+        if (fs::exists(candidate))
+        {
+            fs::remove_all(candidate);
+            std::cout << "removed " << candidate << "\n";
+            ++removed;
+        }
+    }
+    if (removed == 0) std::cout << "nothing to clean\n";
+    return 0;
+}
+
+// plc init：生成 pLangLists.json 模板
+int cmdInit(const std::string& name, const std::string& dir)
+{
+    if (name.empty())
+    {
+        std::cerr << "usage: plc init <name>\n";
+        return 1;
+    }
+    fs::path manifestPath = fs::path(dir) / "pLangLists.json";
+    if (fs::exists(manifestPath))
+    {
+        std::cerr << "error: " << manifestPath.string() << " already exists\n";
+        return 1;
+    }
+    std::string kind = "executable";
+    std::string entry = name + ".plang";
+    if (!fs::exists(fs::path(dir) / entry))
+    {
+        // 同时生成一个最小入口文件
+        std::ofstream f(fs::path(dir) / entry);
+        f << "package " << name << ";\n"
+          << "import std.io;\n\n"
+          << "func main() : int {\n"
+          << "    io.println(\"hello from " << name << "\");\n"
+          << "    return 0;\n"
+          << "}\n";
+        f.close();
+        std::cout << "created " << entry << "\n";
+    }
+    std::ofstream f(manifestPath);
+    f << "{\n"
+      << "  \"name\": \"" << name << "\",\n"
+      << "  \"version\": \"0.1.0\",\n"
+      << "  \"kind\": \"" << kind << "\",\n"
+      << "  \"entry\": \"" << entry << "\",\n"
+      << "  \"sources\": [],\n"
+      << "  \"optimization\": 2,\n"
+      << "  \"link\": { \"libraries\": [] },\n"
+      << "  \"import\": []\n"
+      << "}\n";
+    f.close();
+    std::cout << "created " << manifestPath.string() << "\n";
+    std::cout << "now run: plc build\n";
+    return 0;
+}
+
 // main 函数
 int main(int argc, char* argv[]) {
     bool compileOnly = false;
@@ -563,6 +787,33 @@ int main(int argc, char* argv[]) {
     int optLevel = 2;   // 默认 O2 优化
     std::string outputName;
     std::vector<std::string> inputFiles;
+
+    // pLangLists.json 子命令模式：plc build [dir] / run [dir] [args] / clean [dir] / init <name>
+    if (argc >= 2 && std::string(argv[1]) == "build")
+    {
+        std::string dir = (argc >= 3 && std::string(argv[2]).front() != '-') ? argv[2] : ".";
+        return cmdBuild(dir, false, {}, argv[0]);
+    }
+    if (argc >= 2 && std::string(argv[1]) == "run")
+    {
+        std::vector<std::string> runArgs;
+        std::string dir = ".";
+        int i = 2;
+        if (i < argc && std::string(argv[i]).front() != '-') dir = argv[i++];
+        for (; i < argc; ++i) runArgs.push_back(argv[i]);
+        return cmdBuild(dir, true, runArgs, argv[0]);
+    }
+    if (argc >= 2 && std::string(argv[1]) == "clean")
+    {
+        std::string dir = (argc >= 3 && std::string(argv[2]).front() != '-') ? argv[2] : ".";
+        return cmdClean(dir);
+    }
+    if (argc >= 2 && std::string(argv[1]) == "init")
+    {
+        std::string name = (argc >= 3) ? argv[2] : "";
+        std::string dir = (argc >= 4) ? argv[3] : ".";
+        return cmdInit(name, dir);
+    }
     
     // 解析参数
     for (int i = 1; i < argc; ++i) {
@@ -592,6 +843,11 @@ int main(int argc, char* argv[]) {
         std::cerr << "  -static         build static library (.a)\n";
         std::cerr << "  -o <file>       output file name (default: source name without .plang)\n";
         std::cerr << "  --save-temps    keep intermediate files (.ll, .o)\n";
+        std::cerr << "\nproject mode (pLangLists.json):\n";
+        std::cerr << "  plc build [dir]     compile+link per pLangLists.json\n";
+        std::cerr << "  plc run [dir] [args]  build then run\n";
+        std::cerr << "  plc clean [dir]     remove build artifacts\n";
+        std::cerr << "  plc init <name>     generate pLangLists.json + entry file\n";
         return 1;
     }
     
