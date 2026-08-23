@@ -154,10 +154,15 @@ void Sema::visitProgram(ProgramNode* node)
             // 包限定别名注册：<别名>.<函数名>（别名为包路径最后一段，如 thread.join）
             if (!funcNode->packageName.empty())
             {
-                size_t lastDot = funcNode->packageName.rfind('.');
-                std::string alias = (lastDot == std::string::npos)
-                    ? funcNode->packageName
-                    : funcNode->packageName.substr(lastDot + 1);
+                // 包别名：完整地址（含 /）取最后一段 repo；点分名 foo.bar 取 bar
+                const std::string& pkg = funcNode->packageName;
+                size_t lastSlash = pkg.rfind('/');
+                size_t lastDot = pkg.rfind('.');
+                std::string alias;
+                if (lastSlash != std::string::npos)
+                    alias = pkg.substr(lastSlash + 1);
+                else
+                    alias = (lastDot == std::string::npos) ? pkg : pkg.substr(lastDot + 1);
                 if (!alias.empty() && alias != funcNode->name)
                 {
                     symbols.declare(alias + "." + funcNode->name, sym);
@@ -1622,7 +1627,12 @@ std::string Sema::visitCall(FunctionCallNode* node)
         bool isPackageAlias = false;
         for (const auto& imp : importedModules)
         {
-            std::string alias = imp.substr(imp.rfind('.') + 1);
+            // 包别名：完整地址（含 /）取最后一段 repo；点分名 foo.bar 取 bar
+            std::string alias;
+            size_t lastSlash = imp.rfind('/');
+            size_t lastDot = imp.rfind('.');
+            if (lastSlash != std::string::npos) alias = imp.substr(lastSlash + 1);
+            else alias = imp.substr(lastDot + 1);
             if (alias == objName) { isPackageAlias = true; break; }
         }
         if (isPackageAlias)

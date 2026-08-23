@@ -242,7 +242,9 @@ void resolveModule(ProgramNode* hostProgram, const std::string& path, const std:
     }
 
     std::string modPath = path;
-    std::replace(modPath.begin(), modPath.end(), '.', '/');
+    // 完整地址（含 /，如 github.com/user/repo）保留原样；点分名 foo.bar → foo/bar
+    if (modPath.find('/') == std::string::npos)
+        std::replace(modPath.begin(), modPath.end(), '.', '/');
     fs::path moduleDir = fs::path(stdlibRoot) / modPath;
     if (!fs::is_directory(moduleDir))
     {
@@ -513,7 +515,8 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
     for (const auto& pkg : packages)
     {
         std::string pkgPath = pkg;
-        std::replace(pkgPath.begin(), pkgPath.end(), '.', '/');
+        if (pkgPath.find('/') == std::string::npos)
+            std::replace(pkgPath.begin(), pkgPath.end(), '.', '/');
         fs::path pkgDir = fs::path(stdlibRoot) / pkgPath;
         if (!fs::is_directory(pkgDir))
         {
@@ -530,6 +533,7 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
 
         std::string safeName = pkg;
         std::replace(safeName.begin(), safeName.end(), '.', '_');
+        std::replace(safeName.begin(), safeName.end(), '/', '_');
         std::string pkgObj = "plangc_lib_" + safeName + ".o";
         std::cout << "compiling package " << pkg << " -> " << pkgObj << std::endl;
         if (!compilePackage(pkgFiles, stdlibRoot, optLevel, pkgObj))

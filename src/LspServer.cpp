@@ -613,7 +613,13 @@ llvm::json::Value LspServer::getCompletion(const std::string& uri, int line, int
             // 包成员：符号的 packageName 与输入的包别名匹配（std.io → io）
             if (sym.packageName.empty()) continue;
             std::string pkgAlias = memberPrefix.substr(0, memberPrefix.size() - 1);
-            std::string symAlias = sym.packageName.substr(sym.packageName.rfind('.') + 1);
+            std::string symAlias;
+            size_t lastSlash = sym.packageName.rfind('/');
+            size_t lastDot = sym.packageName.rfind('.');
+            if (lastSlash != std::string::npos)
+                symAlias = sym.packageName.substr(lastSlash + 1);
+            else
+                symAlias = sym.packageName.substr(lastDot + 1);
             if (symAlias != pkgAlias) continue;
             if (!prefix.empty() && sym.name.rfind(prefix, 0) != 0) continue;
             items.push_back(llvm::json::Object{

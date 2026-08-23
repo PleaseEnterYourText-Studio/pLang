@@ -167,7 +167,9 @@ static void resolveModule(ProgramNode* hostProgram, const std::string& path, con
     }
 
     std::string modPath = path;
-    std::replace(modPath.begin(), modPath.end(), '.', '/');
+    // 完整地址（含 /，如 github.com/user/repo）保留原样；点分名 foo.bar → foo/bar
+    if (modPath.find('/') == std::string::npos)
+        std::replace(modPath.begin(), modPath.end(), '.', '/');
     fs::path moduleDir = fs::path(stdlibRoot) / modPath;
     if (!fs::is_directory(moduleDir))
     {

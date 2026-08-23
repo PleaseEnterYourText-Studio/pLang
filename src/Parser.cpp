@@ -318,9 +318,10 @@ std::unique_ptr<ASTNode> Parser::parsePackage()
 {
     Token name = expectPathSegment("expected package name");
     std::string pkgName = name.text;
-    while (match(TokenType::DOT))
+    while (match(TokenType::DOT) || match(TokenType::SLASH))
     {
-        pkgName += "." + expectPathSegment("expected package path segment").text;
+        std::string sep = (previous().type == TokenType::DOT) ? "." : "/";
+        pkgName += sep + expectPathSegment("expected package path segment").text;
     }
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<PackageStmtNode>(pkgName, name.line, name.column);
@@ -331,10 +332,11 @@ std::unique_ptr<ASTNode> Parser::parseImport()
     std::string path;
     Token first = expectPathSegment("expected import path");
     path = first.text;
-    while (match(TokenType::DOT))
+    while (match(TokenType::DOT) || match(TokenType::SLASH))
     {
+        std::string sep = (previous().type == TokenType::DOT) ? "." : "/";
         Token part = expectPathSegment("expected path segment");
-        path += "." + part.text;
+        path += sep + part.text;
     }
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<ImportStmtNode>(path, first.line, first.column);
