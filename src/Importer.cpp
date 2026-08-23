@@ -205,7 +205,11 @@ static void resolveModule(ProgramNode* hostProgram, const std::string& path, con
             errorFlag = true;
             continue;
         }
-        if (libProgram->packageName != path)
+        // 包名匹配：完整地址（github.com/user/repo）或短名（repo，Go 式）
+        std::string shortName = path;
+        size_t lastSlash = path.rfind('/');
+        if (lastSlash != std::string::npos) shortName = path.substr(lastSlash + 1);
+        if (libProgram->packageName != path && libProgram->packageName != shortName)
         {
             errorFlag = true;
             continue;
