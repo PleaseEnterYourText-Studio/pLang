@@ -237,6 +237,9 @@ void Sema::visitDecl(ASTNode* node)
             }
             break;
         }
+        case ASTNodeType::ENUM_DECL:
+            visitEnumDecl(dynamic_cast<EnumDeclNode*>(node));
+            break;
         case ASTNodeType::IMPL_DECL:
             visitImplDecl(dynamic_cast<ImplDeclNode*>(node));
             break;
@@ -329,8 +332,7 @@ void Sema::visitStructDecl(StructDeclNode* node)
         auto sym = symbols.lookup(base);
         if (!sym)
         {
-            error(node->line, node->column, "unknown base type '" + base + "'");
-        }
+            error(node->line, node->column, "unknown base type '" + base + "'");        }
     }
 
     // 检查成员（仅做类型引用检查，不深入）
@@ -374,6 +376,31 @@ void Sema::visitStructDecl(StructDeclNode* node)
         }
     }
     symbols.popScope();
+}
+
+// enum：注册类型名（按 int 处理）与变体常量
+void Sema::visitEnumDecl(EnumDeclNode* node)
+{
+    enumTypes.insert(node->name);
+    long long next = 0;
+    for (auto& v : node->variants)
+    {
+        long long value = v.hasValue ? v.value : next;
+        next = value + 1;
+        auto sym = std::make_shared<Symbol>(v.name, SymbolKind::VARIABLE, SymbolMutability::VAL,
+                                            "int", node->line, node->column);
+        sym->isConst = true;
+        sym->constValue = value;
+        if (!symbols.declare(v.name, sym))
+        {
+            error(node->line, node->column, "duplicate enum variant '" + v.name + "'");
+        }
+        auto qsym = std::make_shared<Symbol>(node->name + "." + v.name, SymbolKind::VARIABLE,
+                                             SymbolMutability::VAL, "int", node->line, node->column);
+        qsym->isConst = true;
+        qsym->constValue = value;
+        symbols.declare(node->name + "." + v.name, qsym);
+    }
 }
 
 void Sema::visitImplDecl(ImplDeclNode* node)
@@ -1665,6 +1692,13 @@ std::string Sema::visitLiteralBool(LiteralBoolNode* node) { return "bool"; }
 
 std::string Sema::visitVariableRef(VariableRefNode* node)
 {
+    // 枚举限定常量 Color.RED：类型名打头，值为编译期常量
+    size_t firstDot = node->name.find('.');
+    if (firstDot != std::string::npos)
+    {
+        std::string typeRoot = node->name.substr(0, firstDot);
+        if (enumTypes.count(typeRoot)) return "int";
+    }
     // 成员访问 s.a.foo —— 拆出最前面的名字
     std::string root = node->name.substr(0, node->name.find('.'));
     auto sym = symbols.lookup(root);
@@ -1873,6 +1907,7 @@ std::string Sema::typeNodeToName(TypeNode* type)
 
 bool Sema::isNumericType(const std::string& type) const
 {
+    if (enumTypes.count(type)) return true;   // enum 按 int 处理
     return type == "int" || type == "i8" || type == "i16" || type == "i64" ||
            type == "uint" || type == "u8" || type == "u16" || type == "u64" ||
            type == "f32" || type == "f64" || type == "char"; // char 即 u8
@@ -1887,8 +1922,11 @@ bool Sema::isBuiltinType(const std::string& type) const
 
 bool Sema::isCompatible(const std::string& from, const std::string& to) const
 {
+    // enum 类型按 int 处理
+    std::string f = enumTypes.count(from) ? "int" : from;
+    std::string t = enumTypes.count(to) ? "int" : to;
     // D1：类型对象化判断（等价/拓宽/衰减规则集中在 TypeSystem）
-    return TypeSystem::compatible(TypeSystem::fromName(from), TypeSystem::fromName(to));
+    return TypeSystem::compatible(TypeSystem::fromName(f), TypeSystem::fromName(t));
 }
 
 bool Sema::isWidening(const std::string& from, const std::string& to) const

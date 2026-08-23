@@ -74,6 +74,7 @@ private:
     std::string currentStruct;              // 当前方法所属结构体（空=自由函数）
     std::set<std::string> duplicateLabels;  // 重复 label 检测
     int loopDepth = 0;                      // 当前循环嵌套深度（break/continue 校验）
+    std::set<std::string> enumTypes;        // 已注册的 enum 类型名（当作 int 处理）
     std::set<std::string> currentLocals;    // 当前函数内声明的局部变量（借用检查）
 
 public:
@@ -90,6 +91,7 @@ private:
     void visitDecl(ASTNode* node);
     void visitFunctionDecl(FunctionDeclNode* node);
     void visitStructDecl(StructDeclNode* node);
+    void visitEnumDecl(EnumDeclNode* node);
     void visitImplDecl(ImplDeclNode* node);
 
     // 语句检查

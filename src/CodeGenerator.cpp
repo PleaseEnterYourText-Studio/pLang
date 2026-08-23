@@ -214,6 +214,12 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
         case ASTNodeType::VARIABLE_REF: {
             auto* ref = static_cast<VariableRefNode*>(node);
+            // enum 变体常量：编译期整型常量
+            auto eIt = enumConstValues.find(ref->name);
+            if (eIt != enumConstValues.end())
+            {
+                return llvm::ConstantInt::get(context, llvm::APInt(32, (uint64_t)eIt->second, true));
+            }
             return getVariable(ref->name);
         }
 
@@ -1251,6 +1257,23 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
     if (!root) return;
 
     setupDebugInfo();
+
+    // 预收集 enum 变体常量（裸名 与 枚举名.变体 均可引用）
+    for (auto& decl : root->decls)
+    {
+        if (decl->type == ASTNodeType::ENUM_DECL)
+        {
+            auto* en = dynamic_cast<EnumDeclNode*>(decl.get());
+            long long next = 0;
+            for (auto& v : en->variants)
+            {
+                long long val = v.hasValue ? v.value : next;
+                next = val + 1;
+                enumConstValues[v.name] = val;
+                enumConstValues[en->name + "." + v.name] = val;
+            }
+        }
+    }
 
     // 预扫描：先建立结构体类型（两遍，支持结构体嵌套/前向引用）
     std::vector<StructDeclNode*> structDecls;

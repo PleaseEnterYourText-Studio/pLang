@@ -37,6 +37,8 @@ struct Symbol
     bool isPub;                     // 跨包可见
     bool isExtern;                  // extern FFI 声明
     bool isVariadic;                // 变参函数
+    bool isConst = false;           // 编译期常量（enum 变体等）
+    long long constValue = 0;       // 常量值
 
     Symbol(const std::string& name, SymbolKind kind, SymbolMutability mutability,
            const std::string& typeName, int line = 0, int column = 0)

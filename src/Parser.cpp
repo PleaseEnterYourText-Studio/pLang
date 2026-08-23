@@ -304,6 +304,7 @@ std::unique_ptr<ASTNode> Parser::parseDeclaration()
     }
 
     if (match(TokenType::USING)) return parseUsing();
+    if (check(TokenType::ENUM)) return parseEnum();
     if (check(TokenType::FUNC)) return parseFunctionDecl();
     if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT)) return parseStructDecl();
     if (check(TokenType::IMPL)) return parseImplDecl();
@@ -395,6 +396,37 @@ std::unique_ptr<ASTNode> Parser::parseUsing()
         aliased = std::move(typeAlias);
     }
     return std::make_unique<UsingDeclNode>(name.text, std::move(aliased), name.line, name.column);
+}
+
+// enum Color { RED, GREEN = 3, BLUE }
+std::unique_ptr<ASTNode> Parser::parseEnum()
+{
+    Token start = expect(TokenType::ENUM, "expected enum");
+    Token name = expect(TokenType::IDENT, "expected enum name");
+    auto en = std::make_unique<EnumDeclNode>(name.text, start.line, start.column);
+    expect(TokenType::LBRACE, "expected { after enum name");
+    long long next = 0;
+    while (!check(TokenType::RBRACE) && !isAtEnd())
+    {
+        Token vname = expect(TokenType::IDENT, "expected enum variant name");
+        EnumVariant v;
+        v.name = vname.text;
+        if (match(TokenType::ASSIGN))
+        {
+            Token num = expect(TokenType::NUMBER, "expected integer value after =");
+            v.value = std::stoll(num.text);
+            v.hasValue = true;
+        }
+        else
+        {
+            v.value = next;
+        }
+        next = v.value + 1;
+        en->variants.push_back(v);
+        if (!match(TokenType::COMMA)) break;
+    }
+    expect(TokenType::RBRACE, "expected } after enum body");
+    return en;
 }
 
 std::unique_ptr<ASTNode> Parser::parseFunctionDecl()

@@ -38,6 +38,7 @@ private:
     std::unordered_map<std::string, llvm::Type*> namedValueElementTypes;  // 指针变量/参数 → 指向类型
     std::unordered_map<std::string, llvm::Type*> fieldPointeeTypes;       // "结构体.指针字段" → 指向类型
     std::unordered_map<std::string, llvm::GlobalVariable*> externGlobals;  // extern 全局数据
+    std::unordered_map<std::string, long long> enumConstValues;           // enum 变体名 → 常量值
     std::set<std::string> volatileVars;   // volatile 变量（访问走 volatile load/store）
 
     // std.thread 内置支持

@@ -48,6 +48,7 @@ enum class ASTNodeType
     THIS_REF,
     TYPE_PARAM,
     TEMPLATE_DECL,
+    ENUM_DECL,
     DO_WHILE_STMT,
     BREAK_STMT,
     CONTINUE_STMT,
@@ -536,9 +537,7 @@ struct StructDeclNode : ASTNode
     int alignBytes;             // 对齐（0=默认）
     std::vector<std::string> typeParams;  // 泛型参数（如 <T: type> 的 T）
     std::vector<std::string> bases;
-    std::vector<std::unique_ptr<ASTNode>> members;
-
-    StructDeclNode(const std::string& name, bool isAbstract, int line = 0, int column = 0)
+    std::vector<std::unique_ptr<ASTNode>> members;    StructDeclNode(const std::string& name, bool isAbstract, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::STRUCT_DECL, line, column), name(name), isAbstract(isAbstract),
           isUnion(false), alignBytes(0) {}
 };
@@ -551,6 +550,23 @@ struct ImplDeclNode : ASTNode
 
     ImplDeclNode(const std::string& target, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::IMPL_DECL, line, column), target(target) {}
+};
+
+// enum 枚举：C 风格整型常量
+struct EnumVariant
+{
+    std::string name;
+    long long value = 0;
+    bool hasValue = false;
+};
+
+struct EnumDeclNode : ASTNode
+{
+    std::string name;
+    std::vector<EnumVariant> variants;
+
+    EnumDeclNode(const std::string& name, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::ENUM_DECL, line, column), name(name) {}
 };
 
 // 以下节点结构来自 main 分支 (81fd524)

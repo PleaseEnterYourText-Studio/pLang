@@ -57,6 +57,7 @@ private:
     std::unique_ptr<ASTNode> parsePackage();
     std::unique_ptr<ASTNode> parseImport();
     std::unique_ptr<ASTNode> parseUsing();
+    std::unique_ptr<ASTNode> parseEnum();
     std::unique_ptr<ASTNode> parseFunctionDecl();
     std::unique_ptr<ASTNode> parseStructDecl(bool allowAnonymous = false);
     std::unique_ptr<ASTNode> parseImplDecl();
