@@ -75,6 +75,9 @@ private:
     std::set<std::string> duplicateLabels;  // 重复 label 检测
     int loopDepth = 0;                      // 当前循环嵌套深度（break/continue 校验）
     std::set<std::string> enumTypes;        // 已注册的 enum 类型名（当作 int 处理）
+    int lambdaCounter = 0;                  // lambda 函数命名计数
+    LambdaExprNode* currentLambda = nullptr; // 正在分析捕获的 lambda（检测自由变量）
+    std::set<std::string>* lambdaOwnVars = nullptr;  // lambda 自身的参数/局部变量集合
     std::set<std::string> currentLocals;    // 当前函数内声明的局部变量（借用检查）
 
 public:
@@ -101,6 +104,8 @@ private:
     void visitIf(IfStmtNode* node);
     void visitWhile(WhileStmtNode* node);
     void visitFor(ForStmtNode* node);
+    std::string visitLambda(LambdaExprNode* node);
+    std::unordered_map<std::string, std::string> closureReturnTypes;   // 闭包变量名 → 返回类型
     void visitGoto(GotoStmtNode* node);
     void visitLabel(LabelStmtNode* node);
     void visitBreak(BreakStmtNode* node);

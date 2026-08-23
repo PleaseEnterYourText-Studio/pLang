@@ -473,7 +473,9 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
 
     if (!generator.verify())
     {
-        std::cerr << sources[0] << ": error: IR verification failed\n";
+        std::string llPath = withExtension(sources[0], ".ll");
+        generator.saveToFile(llPath);
+        std::cerr << sources[0] << ": error: IR verification failed (saved to " << llPath << ")\n";
         return false;
     }
 

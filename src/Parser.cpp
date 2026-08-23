@@ -429,6 +429,75 @@ std::unique_ptr<ASTNode> Parser::parseEnum()
     return en;
 }
 
+std::unique_ptr<ASTNode> Parser::parseLambda()
+{
+    Token start = expect(TokenType::LAMBDA, "expected lambda");
+    auto lam = std::make_unique<LambdaExprNode>(start.line, start.column);
+
+    expect(TokenType::LPAREN, "expected ( after lambda");
+    if (!check(TokenType::RPAREN))
+    {
+        do
+        {
+            bool isVar = true;
+            if (match(TokenType::VAL)) isVar = false;
+            else if (!match(TokenType::VAR))
+            {
+                errorLine = peek().line;
+                errorColumn = peek().column;
+                throw std::runtime_error("expected parameter modifier val/var");
+            }
+            std::unique_ptr<TypeNode> paramType;
+            if (check(TokenType::ARROW))
+            {
+                advance();
+                if (match(TokenType::VAR)) { }
+                else if (match(TokenType::VAL)) { }
+                std::unique_ptr<TypeNode> inner;
+                if (match(TokenType::COLON)) inner = parseTypeSuffix();
+                paramType = std::make_unique<TypeNode>(ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                                                       0, std::move(inner), false);
+            }
+            else
+            {
+                expect(TokenType::COLON, "expected : after parameter modifier");
+                paramType = parseTypeSuffix();
+            }
+            Token pname = expect(TokenType::IDENT, "expected parameter name");
+            lam->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(paramType),
+                                                                  pname.line, pname.column));
+        } while (match(TokenType::COMMA));
+    }
+    expect(TokenType::RPAREN, "expected )");
+
+    if (match(TokenType::COLON))
+    {
+        lam->returnType = parseType();
+    }
+    else if (match(TokenType::ARROW))
+    {
+        if (check(TokenType::VAR) || check(TokenType::VAL))
+        {
+            bool innerConst = false;
+            if (match(TokenType::VAR)) { }
+            else if (match(TokenType::VAL)) { innerConst = true; }
+            std::unique_ptr<TypeNode> inner;
+            if (match(TokenType::COLON)) inner = parseTypeSuffix();
+            else inner = parsePrimitiveType();
+            lam->returnType = std::make_unique<TypeNode>(
+                ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                0, std::move(inner), innerConst);
+        }
+        else
+        {
+            lam->returnType = parseType();
+        }
+    }
+
+    lam->body = std::unique_ptr<BlockStmtNode>(dynamic_cast<BlockStmtNode*>(parseBlock().release()));
+    return lam;
+}
+
 std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
 {
     if (!match(TokenType::FUNC))
@@ -1429,6 +1498,7 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
 
 std::unique_ptr<ASTNode> Parser::parsePrimary()
 {
+    if (check(TokenType::LAMBDA)) return parseLambda();
     if (match(TokenType::LBRACE))
     {
         // 嵌套初始化列表 {{1,2},3} —— 与 parseInitList 结构一致

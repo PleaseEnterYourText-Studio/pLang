@@ -39,6 +39,8 @@ private:
     std::unordered_map<std::string, llvm::Type*> fieldPointeeTypes;       // "结构体.指针字段" → 指向类型
     std::unordered_map<std::string, llvm::GlobalVariable*> externGlobals;  // extern 全局数据
     std::unordered_map<std::string, long long> enumConstValues;           // enum 变体名 → 常量值
+    // 闭包变量/参数名 → lambda 函数 LLVM 类型（调用闭包时按此签名位转换）
+    std::unordered_map<std::string, llvm::FunctionType*> closureSigOf;
     std::set<std::string> volatileVars;   // volatile 变量（访问走 volatile load/store）
 
     // std.thread 内置支持

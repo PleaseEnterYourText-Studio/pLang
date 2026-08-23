@@ -21,7 +21,7 @@ enum class TokenType
     PUB, PRT, PRI,
     THIS, THIS_TYPE, TYPE,
     AS,
-    IF, ELSE, WHILE, FOR, DO, ASM,
+    IF, ELSE, WHILE, FOR, DO, ASM, LAMBDA,
     GOTO, LABEL, SWITCH, CASE, DEFAULT, BREAK, CONTINUE,
     SIZEOF,      // sizeof(T) 类型大小
     EXTERN,      // extern func 声明（FFI）
@@ -81,7 +81,7 @@ public:
             {TokenType::PUB, "PUB"}, {TokenType::PRT, "PRT"}, {TokenType::PRI, "PRI"},
             {TokenType::THIS, "THIS"}, {TokenType::THIS_TYPE, "THIS_TYPE"}, {TokenType::TYPE, "TYPE"},
             {TokenType::AS, "AS"},
-            {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"}, {TokenType::ASM, "ASM"},
+            {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"}, {TokenType::ASM, "ASM"}, {TokenType::LAMBDA, "LAMBDA"},
             {TokenType::GOTO, "GOTO"}, {TokenType::LABEL, "LABEL"}, {TokenType::SWITCH, "SWITCH"}, {TokenType::CASE, "CASE"}, {TokenType::DEFAULT, "DEFAULT"}, {TokenType::BREAK, "BREAK"}, {TokenType::CONTINUE, "CONTINUE"},
             {TokenType::SIZEOF, "SIZEOF"},
             {TokenType::EXTERN, "EXTERN"}, {TokenType::NULL_LIT, "NULL_LIT"},

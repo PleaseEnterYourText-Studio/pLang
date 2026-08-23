@@ -372,6 +372,14 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
             error(param->line, param->column, "parameter '" + param->name + "' is missing a type");
         }
     }
+    // lambda 生成的函数：捕获变量作为 env 字段，登记为参数符号（body 内按名字解析）
+    for (auto& cap : node->captures)
+    {
+        auto sym = std::make_shared<Symbol>(cap.first, SymbolKind::PARAMETER,
+                                            SymbolMutability::VAL, cap.second,
+                                            node->line, node->column);
+        symbols.declare(cap.first, sym);
+    }
 
     if (node->body)
     {
@@ -993,6 +1001,8 @@ void Sema::visitBlock(BlockStmtNode* node)
 
 void Sema::visitVarDecl(VariableDeclNode* node)
 {
+    // lambda 体内的局部变量：计入 lambda 自身变量，避免误判为捕获
+    if (lambdaOwnVars) lambdaOwnVars->insert(node->name);
     std::string declaredType;
     if (node->type)
     {
@@ -1028,6 +1038,13 @@ void Sema::visitVarDecl(VariableDeclNode* node)
     if (node->initializer)
     {
         initType = visitExpr(node->initializer.get());
+        // 闭包变量：记录返回类型供调用点使用
+        if (declaredType == "Closure" && node->initializer->type == ASTNodeType::LAMBDA_EXPR)
+        {
+            auto* lam = static_cast<LambdaExprNode*>(node->initializer.get());
+            closureReturnTypes[node->name] =
+                lam->returnType ? typeNodeToName(lam->returnType.get()) : "int";
+        }
     }
 
     if (node->isMoved)
@@ -1192,6 +1209,58 @@ void Sema::visitFor(ForStmtNode* node)
     symbols.popScope();
 }
 
+// lambda 闭包：检测捕获的自由变量，生成具名函数 __lambdaN（捕获变量作前置参数）
+std::string Sema::visitLambda(LambdaExprNode* node)
+{
+    std::string name = "__lambda" + std::to_string(lambdaCounter++);
+    node->generatedName = name;
+
+    // 在 lambda 作用域分析函数体以检测捕获（currentLambda 供 visitVariableRef 记录）
+    std::set<std::string> ownVars;
+    lambdaOwnVars = &ownVars;
+    symbols.pushScope();
+    for (auto& p : node->params)
+    {
+        ownVars.insert(p->name);
+        if (p->type && p->type->baseType == ASTNodeType::TYPE_PRIMITIVE)
+            tryResolveGenericType(p->type->name);
+        if (p->type)
+        {
+            auto sym = std::make_shared<Symbol>(p->name, SymbolKind::PARAMETER,
+                                                p->isVar ? SymbolMutability::VAR : SymbolMutability::VAL,
+                                                typeNodeToName(p->type.get()), p->line, p->column);
+            symbols.declare(p->name, sym);
+        }
+    }
+    currentLambda = node;
+    std::string savedReturnType = currentReturnType;
+    currentReturnType = node->returnType ? typeNodeToName(node->returnType.get()) : "";
+    if (node->body) visitBlock(node->body.get());
+    currentReturnType = savedReturnType;
+    currentLambda = nullptr;
+    lambdaOwnVars = nullptr;
+    symbols.popScope();
+
+    // 生成 lambda 函数声明：签名 (env: ptr, 声明参数...) -> ret；捕获变量按 env 字段访问
+    auto fn = std::make_unique<FunctionDeclNode>(name, node->line, node->column);
+    fn->packageName = currentPackage;
+    fn->captures = node->captures;
+    auto envParamTy = std::make_unique<TypeNode>(ASTNodeType::TYPE_POINTER, "",
+                                                 node->line, node->column);
+    fn->params.push_back(std::make_unique<ParameterNode>(true, "__env", std::move(envParamTy),
+                                                         node->line, node->column));
+    for (auto& p : node->params)
+    {
+        auto t = p->type ? substituteType(p->type.get(), {}, {}) : nullptr;
+        fn->params.push_back(std::make_unique<ParameterNode>(p->isVar, p->name, std::move(t),
+                                                             p->line, p->column));
+    }
+    fn->returnType = node->returnType ? substituteType(node->returnType.get(), {}, {}) : nullptr;
+    fn->body = std::move(node->body);
+    if (currentProgram) currentProgram->decls.push_back(std::move(fn));
+    return "Closure";
+}
+
 void Sema::visitReturn(ReturnStmtNode* node)
 {
     if (node->value)
@@ -1287,6 +1356,8 @@ std::string Sema::visitExpr(ASTNode* node)
             if (sz->targetType) visitExpr(nullptr); // 类型校验在 CodeGenerator 处理（大小按 LLVM 类型）
             return "int";
         }
+        case ASTNodeType::LAMBDA_EXPR:
+            return visitLambda(dynamic_cast<LambdaExprNode*>(node));
         case ASTNodeType::BLOCK_STMT:
         {
             // 初始化列表 {a, b, {c}}：逐个访问元素（类型检查 + 包限定调用重命名）
@@ -1607,6 +1678,13 @@ std::string Sema::visitCall(FunctionCallNode* node)
         bool isFuncPtr = sym->typeName == "func";
         auto pe = pointerElementTypes.find(node->name);
         if (pe != pointerElementTypes.end() && pe->second == "func") isFuncPtr = true;
+        // 闭包调用：Closure 类型变量
+        if (sym->typeName == "Closure")
+        {
+            for (auto& a : node->arguments) visitExpr(a.get());
+            auto rt = closureReturnTypes.find(node->name);
+            return (rt != closureReturnTypes.end()) ? rt->second : "int";
+        }
         if (isFuncPtr)
         {
             for (auto& a : node->arguments) visitExpr(a.get());
@@ -1849,6 +1927,18 @@ std::string Sema::visitVariableRef(VariableRefNode* node)
         error(node->line, node->column, "undefined variable '" + root + "'");
         return "";
     }
+    // lambda 捕获：引用外层变量（非 lambda 自身参数/局部）时记录为捕获
+    if (currentLambda && lambdaOwnVars &&
+        !lambdaOwnVars->count(root) && !symbols.lookupLocal(root) &&
+        (sym->kind == SymbolKind::VARIABLE || sym->kind == SymbolKind::PARAMETER))
+    {
+        bool exists = false;
+        for (auto& c : currentLambda->captures)
+        {
+            if (c.first == root) { exists = true; break; }
+        }
+        if (!exists) currentLambda->captures.push_back({root, sym->typeName});
+    }
     if (sym->mutability == SymbolMutability::MOVED)
     {
         error(node->line, node->column, "use of moved variable '" + root + "'");
@@ -2059,7 +2149,8 @@ bool Sema::isBuiltinType(const std::string& type) const
 {
     return isNumericType(type) || type == "char" || type == "string" ||
            type == "bool" || type == "pointer" || type == "array" ||
-           type == "wchar" || type == "wstring" || type == "ptr" || type == "func";
+           type == "wchar" || type == "wstring" || type == "ptr" || type == "func" ||
+           type == "Closure";
 }
 
 bool Sema::isCompatible(const std::string& from, const std::string& to) const

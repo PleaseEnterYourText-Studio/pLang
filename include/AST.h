@@ -62,6 +62,7 @@ enum class ASTNodeType
     STRUCT_INIT,
     SIZEOF_EXPR,
     ASM_STMT,
+    LAMBDA_EXPR,
 
     // 类型
     TYPE_PRIMITIVE,
@@ -522,10 +523,24 @@ struct FunctionDeclNode : ASTNode
     bool isPub;             // pub：跨包可见
     bool isVariadic;        // 变参函数（extern ...）
     std::string packageName; // 所属包（如 "std.thread"），由解析器在合并/解析时标注
+    std::vector<std::pair<std::string, std::string>> captures;  // lambda 生成的函数：捕获变量 {名字, 类型}
 
     FunctionDeclNode(const std::string& name, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::FUNCTION_DECL, line, column), name(name), hasBody(false),
           isExtern(false), isPub(false), isVariadic(false) {}
+};
+
+// lambda 闭包表达式：lambda (params) : ret { body }
+struct LambdaExprNode : ASTNode
+{
+    std::vector<std::unique_ptr<ParameterNode>> params;
+    std::unique_ptr<TypeNode> returnType;
+    std::unique_ptr<BlockStmtNode> body;
+    std::vector<std::pair<std::string, std::string>> captures;  // 捕获变量 {名字, 类型}（Sema 填充）
+    std::string generatedName;                                  // 生成的 lambda 函数名（Sema 填充）
+
+    LambdaExprNode(int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::LAMBDA_EXPR, line, column) {}
 };
 
 // struct 声明

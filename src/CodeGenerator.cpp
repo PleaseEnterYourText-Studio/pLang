@@ -451,6 +451,65 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             return val;
         }
 
+        case ASTNodeType::LAMBDA_EXPR: {
+            auto* lam = static_cast<LambdaExprNode*>(node);
+            llvm::PointerType* ptrTy = llvm::PointerType::get(context, 0);
+            std::string envName = lam->generatedName + "_env";
+            // 捕获环境：命名结构体（函数生成处同名构建，类型一致）
+            llvm::StructType* envTy = nullptr;
+            if (!lam->captures.empty())
+            {
+                std::vector<llvm::Type*> envTys;
+                for (auto& cap : lam->captures) envTys.push_back(getLLVMType(cap.second));
+                envTy = llvm::StructType::create(context, envTys, envName);
+                structDefs[envName] = StructDef{envTy, {}, envTys, {}, false, 0, false, false};
+            }
+            // lambda 函数签名：(env: ptr, 声明参数...) -> ret
+            std::vector<llvm::Type*> paramTys;
+            paramTys.push_back(ptrTy);
+            for (auto& p : lam->params) paramTys.push_back(getLLVMType(p->type.get()));
+            llvm::Type* retTy = lam->returnType
+                ? getLLVMType(lam->returnType.get())
+                : llvm::Type::getInt32Ty(context);
+            llvm::FunctionType* ft = llvm::FunctionType::get(retTy, paramTys, false);
+            llvm::Function* fn = module->getFunction(lam->generatedName);
+            if (!fn)
+                fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage,
+                                            lam->generatedName, module.get());
+            // 分配并填充捕获环境
+            llvm::Value* envPtr = llvm::ConstantPointerNull::get(ptrTy);
+            if (envTy)
+            {
+                auto mallocFn = module->getFunction("malloc");
+                if (!mallocFn)
+                {
+                    llvm::FunctionType* mft = llvm::FunctionType::get(ptrTy,
+                        {llvm::Type::getInt64Ty(context)}, false);
+                    mallocFn = llvm::Function::Create(mft, llvm::Function::ExternalLinkage,
+                                                      "malloc", module.get());
+                }
+                uint64_t envSize = module->getDataLayout().getTypeAllocSize(envTy);
+                envPtr = builder.CreateCall(mallocFn,
+                    {llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), envSize)}, "env");
+                for (size_t i = 0; i < lam->captures.size(); ++i)
+                {
+                    llvm::Value* fptr = builder.CreateStructGEP(envTy, envPtr, i, "cap");
+                    auto it = namedValues.find(lam->captures[i].first);
+                    if (it != namedValues.end())
+                    {
+                        llvm::Value* v = builder.CreateLoad(it->second.type, it->second.ptr,
+                                                            lam->captures[i].first);
+                        builder.CreateStore(v, fptr);
+                    }
+                }
+            }
+            llvm::Type* cloTy = structDefs["Closure"].type;
+            llvm::Value* clo = llvm::UndefValue::get(cloTy);
+            clo = builder.CreateInsertValue(clo, fn, 0, "clo.fn");
+            clo = builder.CreateInsertValue(clo, envPtr, 1, "clo.env");
+            return clo;
+        }
+
         case ASTNodeType::BLOCK_STMT: {
             // 数组/结构体初始化 {1,2,3} —— 简化：取最后一个元素
             auto* block = static_cast<BlockStmtNode*>(node);
@@ -464,6 +523,48 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
         case ASTNodeType::FUNCTION_CALL: {
             auto* call = static_cast<FunctionCallNode*>(node);
+
+            // 闭包调用 c(args)：c 是 Closure 类型变量/参数（fn + env 统一传参）
+            if (call->name.find('.') == std::string::npos)
+            {
+                auto cIt = namedValues.find(call->name);
+                if (cIt != namedValues.end() && cIt->second.type->isStructTy() &&
+                    structNameOf(cIt->second.type) == "Closure")
+                {
+                    llvm::Type* ptrTy = llvm::PointerType::get(context, 0);
+                    llvm::Type* cloTy = structDefs["Closure"].type;
+                    llvm::Value* fnGep = builder.CreateStructGEP(cloTy, cIt->second.ptr, 0, "clo.fn");
+                    llvm::Value* fnPtr = builder.CreateLoad(ptrTy, fnGep, "cfn");
+                    llvm::Value* envGep = builder.CreateStructGEP(cloTy, cIt->second.ptr, 1, "clo.env");
+                    llvm::Value* envPtr = builder.CreateLoad(ptrTy, envGep, "cenv");
+                    llvm::FunctionType* clof = nullptr;
+                    auto sigIt = closureSigOf.find(call->name);
+                    if (sigIt != closureSigOf.end()) clof = sigIt->second;
+                    // 生成实参并取类型
+                    std::vector<llvm::Value*> args;
+                    args.push_back(envPtr);
+                    std::vector<llvm::Type*> argTys;
+                    argTys.push_back(ptrTy);
+                    for (auto& a : call->arguments)
+                    {
+                        llvm::Value* av = generateExpression(a.get());
+                        args.push_back(av);
+                        argTys.push_back(av ? av->getType() : ptrTy);
+                    }
+                    if (!clof)
+                    {
+                        // 回退：按实参类型构建签名（保证实参与形参类型一致）
+                        clof = llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                                                       argTys, false);
+                    }
+                    // 丢弃函数指针来源类型（ptrtoint→inttoptr），避免 verifier 校验位转换不匹配
+                    llvm::Value* fint = builder.CreatePtrToInt(fnPtr,
+                        llvm::Type::getInt64Ty(context), "cfn.i");
+                    llvm::Value* ftyped = builder.CreateIntToPtr(fint,
+                        llvm::PointerType::get(clof, 0), "cfn.ty");
+                    return builder.CreateCall(clof, ftyped, args, "cloCall");
+                }
+            }
 
             // std.atomic 原子内置调用
             if (call->name.rfind("atomic.", 0) == 0) {
@@ -481,8 +582,23 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             if (func)
             {
                 std::vector<llvm::Value*> args;
+                llvm::Type* cloTy = structDefs["Closure"].type;
                 for (size_t i = 0; i < call->arguments.size(); ++i)
                 {
+                    // 闭包实参 → 闭包形参：传播调用签名
+                    if (i < func->getFunctionType()->getNumParams() &&
+                        func->getFunctionType()->getParamType(i) == cloTy &&
+                        call->arguments[i]->type == ASTNodeType::VARIABLE_REF)
+                    {
+                        auto* ref = static_cast<VariableRefNode*>(call->arguments[i].get());
+                        auto sigIt = closureSigOf.find(ref->name);
+                        if (sigIt != closureSigOf.end())
+                        {
+                            auto pIt = func->args().begin();
+                            std::advance(pIt, i);
+                            closureSigOf[pIt->getName().str()] = sigIt->second;
+                        }
+                    }
                     llvm::Value* v = generateExpression(call->arguments[i].get());
                     if (v && i < func->getFunctionType()->getNumParams())
                         v = coerceValue(v, func->getFunctionType()->getParamType(i));
@@ -607,6 +723,18 @@ void CodeGenerator::generateStatement(ASTNode* node)
             namedValues[decl->name] = VarInfo{alloca, varType};
             if (decl->isVolatile) volatileVars.insert(decl->name);
             emitDbgDeclare(decl->name, alloca, varType, decl->line);
+            // 闭包赋值：记录 变量名 → lambda 函数 LLVM 类型（调用闭包时按签名位转换）
+            if (varType->isStructTy() && decl->initializer &&
+                decl->initializer->type == ASTNodeType::LAMBDA_EXPR)
+            {
+                auto* lam = static_cast<LambdaExprNode*>(decl->initializer.get());
+                std::vector<llvm::Type*> pTys;
+                pTys.push_back(llvm::PointerType::get(context, 0));
+                for (auto& p : lam->params) pTys.push_back(getLLVMType(p->type.get()));
+                llvm::Type* rTy = lam->returnType
+                    ? getLLVMType(lam->returnType.get()) : llvm::Type::getInt32Ty(context);
+                closureSigOf[decl->name] = llvm::FunctionType::get(rTy, pTys, false);
+            }
 
             if (decl->initializer) {
                 if (decl->initializer->type == ASTNodeType::BLOCK_STMT &&
@@ -1119,6 +1247,29 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
         ++loopIdx;
     }
 
+    // lambda 生成的函数：捕获变量从 env 结构体加载（body 内按名字访问）
+    if (!fn->captures.empty())
+    {
+        auto envIt = namedValues.find("__env");
+        if (envIt != namedValues.end())
+        {
+            std::vector<llvm::Type*> envTys;
+            for (auto& cap : fn->captures) envTys.push_back(getLLVMType(cap.second));
+            llvm::StructType* envTy = llvm::StructType::create(context, envTys,
+                                                               fn->name + "_env");
+            structDefs[fn->name + "_env"] = StructDef{envTy, {}, envTys, {}, false, 0, false, false};
+            llvm::Value* envVal = builder.CreateLoad(envIt->second.type, envIt->second.ptr, "__env");
+            for (size_t i = 0; i < fn->captures.size(); ++i)
+            {
+                llvm::Value* fptr = builder.CreateStructGEP(envTy, envVal, i, "cap");
+                llvm::Value* capVal = builder.CreateLoad(envTys[i], fptr, "capval");
+                llvm::AllocaInst* slot = builder.CreateAlloca(envTys[i], nullptr, fn->captures[i].first);
+                builder.CreateStore(capVal, slot);
+                namedValues[fn->captures[i].first] = VarInfo{slot, envTys[i]};
+            }
+        }
+    }
+
     generateStatement(fn->body.get());
 
     if (!builder.GetInsertBlock()->getTerminator()) {
@@ -1279,6 +1430,13 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
     if (!root) return;
 
     setupDebugInfo();
+
+    // 内置闭包类型：Closure { fn: func 指针, env: 捕获环境指针 }
+    auto closureTy = llvm::StructType::create(context, "Closure");
+    closureTy->setBody({llvm::PointerType::get(context, 0), llvm::PointerType::get(context, 0)});
+    structDefs["Closure"] = StructDef{closureTy, {"fn", "env"},
+                                      {llvm::PointerType::get(context, 0), llvm::PointerType::get(context, 0)},
+                                      {0, 0}, false, 0, false, false};
 
     // 预收集 enum 变体常量（裸名 与 枚举名.变体 均可引用）
     for (auto& decl : root->decls)
