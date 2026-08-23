@@ -781,6 +781,7 @@ int cmdInit(const std::string& name, const std::string& dir)
       << "  \"sources\": [],\n"
       << "  \"optimization\": 2,\n"
       << "  \"link\": { \"libraries\": [] },\n"
+      << "  \"dependencies\": [],\n"
       << "  \"import\": []\n"
       << "}\n";
     f.close();
