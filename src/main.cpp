@@ -246,8 +246,13 @@ void resolveModule(ProgramNode* hostProgram, const std::string& path, const std:
     fs::path moduleDir = fs::path(stdlibRoot) / modPath;
     if (!fs::is_directory(moduleDir))
     {
-        resolved.insert(path); // 模块不存在：静默忽略（保持现状）
-        return;
+        // 标准库未命中：尝试用户包根（pvp 安装的第三方包）
+        moduleDir = fs::path(plangGetPvpRoot()) / modPath;
+        if (!fs::is_directory(moduleDir))
+        {
+            resolved.insert(path); // 模块不存在：静默忽略（保持现状）
+            return;
+        }
     }
 
     importStack.push_back(path);
@@ -510,6 +515,11 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
         std::string pkgPath = pkg;
         std::replace(pkgPath.begin(), pkgPath.end(), '.', '/');
         fs::path pkgDir = fs::path(stdlibRoot) / pkgPath;
+        if (!fs::is_directory(pkgDir))
+        {
+            // 第三方包：pvp 用户包根
+            pkgDir = fs::path(plangGetPvpRoot()) / pkgPath;
+        }
         if (!fs::is_directory(pkgDir)) continue;
         std::vector<std::string> pkgFiles;
         for (const auto& entry : fs::directory_iterator(pkgDir))

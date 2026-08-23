@@ -106,6 +106,18 @@ std::string plangGetStdlibRoot(const std::string& exePath)
     return exeAbs.parent_path().parent_path().string();
 }
 
+// 用户包根（pvp 安装的第三方包）：PLANG_PVP 覆盖，否则 ~/Library/Python/<版本>/lib/pLang/pvp
+std::string plangGetPvpRoot()
+{
+    if (const char* env = std::getenv("PLANG_PVP"))
+    {
+        return env;
+    }
+    const char* home = std::getenv("HOME");
+    if (!home) return "";
+    return std::string(home) + "/Library/Python/0.x/lib/pLang/pvp";
+}
+
 // 深拷贝 TypeNode
 std::unique_ptr<TypeNode> plangCloneType(TypeNode* t)
 {
@@ -159,8 +171,13 @@ static void resolveModule(ProgramNode* hostProgram, const std::string& path, con
     fs::path moduleDir = fs::path(stdlibRoot) / modPath;
     if (!fs::is_directory(moduleDir))
     {
-        resolved.insert(path); // 模块不存在：静默忽略
-        return;
+        // 标准库未命中：尝试用户包根（pvp 安装的第三方包）
+        moduleDir = fs::path(plangGetPvpRoot()) / modPath;
+        if (!fs::is_directory(moduleDir))
+        {
+            resolved.insert(path); // 模块不存在：静默忽略
+            return;
+        }
     }
 
     importStack.push_back(path);
