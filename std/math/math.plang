@@ -1,0 +1,49 @@
+package std.math;
+
+// PLang 标准库：数学函数（extern 直通 libm，均以 f64 运算）。
+// 整数取绝对值用 math.absI；其余浮点函数注意 f64 与 int 的显式转换。
+
+extern func sqrt(val: f64 x) : f64;
+extern func pow(val: f64 x, val: f64 y) : f64;
+extern func exp(val: f64 x) : f64;
+extern func log(val: f64 x) : f64;
+extern func log2(val: f64 x) : f64;
+extern func log10(val: f64 x) : f64;
+extern func sin(val: f64 x) : f64;
+extern func cos(val: f64 x) : f64;
+extern func tan(val: f64 x) : f64;
+extern func asin(val: f64 x) : f64;
+extern func acos(val: f64 x) : f64;
+extern func atan(val: f64 x) : f64;
+extern func atan2(val: f64 y, val: f64 x) : f64;
+extern func fabs(val: f64 x) : f64;
+extern func floor(val: f64 x) : f64;
+extern func ceil(val: f64 x) : f64;
+extern func round(val: f64 x) : f64;
+extern func trunc(val: f64 x) : f64;
+extern func fmin(val: f64 a, val: f64 b) : f64;
+extern func fmax(val: f64 a, val: f64 b) : f64;
+extern func fmod(val: f64 x, val: f64 y) : f64;
+
+// 整数绝对值
+pub func absI(val: int n) : int {
+    if (n < 0) {
+        return 0 - n;
+    }
+    return n;
+}
+
+// 浮点绝对值
+pub func abs(val: f64 x) : f64 {
+    return fabs(x);
+}
+
+// 平方根（负数返回 NaN）
+pub func sqrtF(val: f64 x) : f64 {
+    return sqrt(x);
+}
+
+// x 的 y 次幂
+pub func powF(val: f64 x, val: f64 y) : f64 {
+    return pow(x, y);
+}

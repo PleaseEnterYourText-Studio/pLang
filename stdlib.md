@@ -19,6 +19,8 @@
 | `std.fs` | `import std.fs;` | 文件系统：读/写/定位/删除/重命名/读整个文件 |
 | `std.buffer` | `import std.buffer;` | 可变长字符串构建器（StringBuilder） |
 | `std.map` | `import std.map;` | 字符串键哈希表：`Map<T>` 泛型容器 |
+| `std.math` | `import std.math;` | 数学函数：sqrt/pow/三角/floor/ceil/fabs 等 |
+| `std.time` | `import std.time;` | 时间：Unix 秒、CPU 时钟、单调毫秒 |
 | `std.sqlite` | `import std.sqlite;` | 数据库：SQLite 绑定，自动链接 -lsqlite3 |
 
 ---
@@ -471,6 +473,10 @@ func main() : int {
 | `string.replace(s, from, to)` | 替换所有出现 |
 | `string.parseInt(s, base)` | 按 base（2/8/10/16）解析，失败返回 0 |
 | `string.intToStr(n)` | 整数 → 十进制堆字符串 |
+| `string.parseF64(s)` | 解析浮点数（失败返回 0.0） |
+| `string.reverse(s)` | 反转字符串（堆内存） |
+| `string.count(hay, needle)` | 子串出现次数 |
+| `string.split(s, delim, out, max)` | 按分隔符拆分到 `char*` 数组，返回段数（段为堆副本） |
 | `string.isDigit/isAlpha/isSpace/isAlnum/isUpper/isLower(c)` | 字符分类 |
 | `string.toUpperChar/toLowerChar(c)` | 字符大小写转换 |
 
@@ -610,6 +616,56 @@ func main() : int {
     }
     var: bool has = map.contains<int>(&m, "pear");
     map.destroy<int>(&m);
+    return 0;
+}
+```
+
+---
+
+# std.math 数学函数
+
+`extern` 直通 libm，以 `f64` 运算。需要 `import std.math;`。
+
+| 函数 | 说明 |
+|------|------|
+| `math.sqrtF(x)` / `math.powF(x, y)` | 平方根 / 幂 |
+| `math.exp/log/log2/log10(x)` | 指数 / 对数 |
+| `math.sin/cos/tan/asin/acos/atan(x)` | 三角函数 |
+| `math.atan2(y, x)` | 四象限反正切 |
+| `math.abs(x)` / `math.absI(n)` | 浮点 / 整数绝对值 |
+| `math.floor/ceil/round/trunc(x)` | 取整 |
+| `math.fmin(a, b)` / `math.fmax(a, b)` | 最小 / 最大 |
+| `math.fmod(x, y)` | 浮点取余 |
+
+```plang
+import std.math;
+var: f64 s = math.sqrt(16.0);        // 4
+var: f64 p = math.pow(2.0, 10.0);    // 1024
+var: int a = math.absI(-5);          // 5
+```
+
+---
+
+# std.time 时间
+
+`extern` 直通 libc。需要 `import std.time;`。
+
+| 函数 | 说明 |
+|------|------|
+| `time.epoch()` | Unix 秒（自 1970-01-01） |
+| `time.cpu()` | 进程 CPU 时钟（clock_t，POSIX 上 1e6/秒） |
+| `time.cpuSeconds()` | CPU 时间（秒，f64） |
+| `time.monotonicMs()` | 单调时钟毫秒（测量耗时，不受系统时间调整影响） |
+
+```plang
+import std.time;
+import std.io;
+
+func main() : int {
+    var: i64 t0 = time.monotonicMs();
+    // ... 计时 ...
+    var: i64 t1 = time.monotonicMs();
+    io.printInt(int as (t1 - t0)); io.println(" ms");
     return 0;
 }
 ```

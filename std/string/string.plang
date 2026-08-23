@@ -379,3 +379,91 @@ pub func toLowerChar(val: char c) : char {
     }
     return c;
 }
+
+// —— 数值解析与更多变换 ——
+
+extern func strtod(var -> var: char nptr, var -> var: ptr endptr) : f64;
+
+// 解析浮点数（失败返回 0.0）
+pub func parseF64(var -> var: char s) : f64 {
+    return strtod(s, null);
+}
+
+// 反转字符串（堆内存，调用方 free）
+pub func reverse(var -> var: char s) -> var: ptr {
+    var: int n = len(s);
+    var -> var: char out = mem.malloc(n + 1);
+    if (out == null) return null;
+    var: int i = 0;
+    while (i < n) {
+        out[i] = s[n - 1 - i];
+        i = i + 1;
+    }
+    out[n] = '\0';
+    return out;
+}
+
+// 统计子串出现次数
+pub func count(var -> var: char hay, var -> var: char needle) : int {
+    var: int hl = len(hay);
+    var: int nl = len(needle);
+    if (nl == 0) return 0;
+    var: int cnt = 0;
+    var: int i = 0;
+    while (i <= hl - nl) {
+        var: bool m = true;
+        var: int j = 0;
+        while (j < nl) {
+            if (hay[i + j] != needle[j]) {
+                m = false;
+                j = nl;
+            }
+            j = j + 1;
+        }
+        if (m) {
+            cnt = cnt + 1;
+            i = i + nl;
+        } else {
+            i = i + 1;
+        }
+    }
+    return cnt;
+}
+
+// 按分隔符拆分：段写入 out[0..]（char* 数组，段为堆副本），返回段数。
+// 调用方负责分配 out（max 个 ptr）并在用完后 free 每段与 out 数组。
+pub func split(var -> var: char s, var -> var: char delim, var -> var: ptr out, val: int max) : int {
+    var: int n = len(s);
+    var: int dl = len(delim);
+    var: int k = 0;
+    var: int start = 0;
+    var: int i = 0;
+    while (i < n && k < max) {
+        var: bool m = true;
+        if (i + dl > n) {
+            m = false;
+        } else {
+            var: int j = 0;
+            while (j < dl) {
+                if (s[i + j] != delim[j]) {
+                    m = false;
+                    j = dl;
+                }
+                j = j + 1;
+            }
+        }
+        if (m) {
+            out[k] = sub(s, start, i - start);
+            k = k + 1;
+            start = i + dl;
+            i = i + dl;
+        } else {
+            i = i + 1;
+        }
+    }
+    if (k < max) {
+        out[k] = sub(s, start, n - start);
+        k = k + 1;
+    }
+    return k;
+}

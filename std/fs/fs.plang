@@ -150,3 +150,12 @@ pub func writeAllBytes(var -> var: ptr path, var -> var: ptr buf, val: i64 n) : 
     var: int rc = fclose(fp);
     return w == n && rc == 0;
 }
+
+// 追加字符串到文件末尾（不存在则创建），返回是否成功
+pub func appendAll(var -> var: ptr path, var -> var: ptr content) : bool {
+    var -> var: ptr fp = fopen(path, "a");
+    if (fp == null) return false;
+    var: int r = fputs(content, fp);
+    var: int rc = fclose(fp);
+    return r >= 0 && rc == 0;
+}
