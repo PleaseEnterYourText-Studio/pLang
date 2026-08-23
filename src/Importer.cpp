@@ -130,6 +130,57 @@ std::string plangGetPvpRoot()
     return "";
 }
 
+// 读 pvp installed.json：别名 → 仓库地址
+std::map<std::string, std::string> plangInstalledAliases(const std::string& pvpRoot)
+{
+    std::map<std::string, std::string> m;
+    std::ifstream f(fs::path(pvpRoot) / "installed.json");
+    if (!f.is_open()) return m;
+    std::stringstream buf;
+    buf << f.rdbuf();
+    std::string c = buf.str();
+    size_t pos = 0;
+    while (true)
+    {
+        size_t q1 = c.find('"', pos);
+        if (q1 == std::string::npos) break;
+        size_t q2 = c.find('"', q1 + 1);
+        if (q2 == std::string::npos) break;
+        std::string key = c.substr(q1 + 1, q2 - q1 - 1);
+        size_t colon = c.find(':', q2);
+        size_t q3 = c.find('"', colon);
+        size_t q4 = c.find('"', q3 + 1);
+        if (colon == std::string::npos || q3 == std::string::npos || q4 == std::string::npos) break;
+        m[key] = c.substr(q3 + 1, q4 - q3 - 1);
+        pos = q4 + 1;
+    }
+    return m;
+}
+
+// 解析模块目录：标准库 → pvp 直接路径 → installed.json 别名
+fs::path plangResolveModuleDir(const std::string& path, const std::string& stdlibRoot)
+{
+    std::string modPath = path;
+    if (modPath.find('/') == std::string::npos)
+        std::replace(modPath.begin(), modPath.end(), '.', '/');
+    fs::path dir = fs::path(stdlibRoot) / modPath;
+    if (fs::is_directory(dir)) return dir;
+    std::string pvp = plangGetPvpRoot();
+    if (!pvp.empty())
+    {
+        dir = fs::path(pvp) / modPath;
+        if (fs::is_directory(dir)) return dir;
+        auto aliases = plangInstalledAliases(pvp);
+        auto it = aliases.find(path);
+        if (it != aliases.end())
+        {
+            dir = fs::path(pvp) / it->second;
+            if (fs::is_directory(dir)) return dir;
+        }
+    }
+    return fs::path();
+}
+
 // 深拷贝 TypeNode
 std::unique_ptr<TypeNode> plangCloneType(TypeNode* t)
 {
@@ -178,20 +229,11 @@ static void resolveModule(ProgramNode* hostProgram, const std::string& path, con
         }
     }
 
-    std::string modPath = path;
-    // 完整地址（含 /，如 github.com/user/repo）保留原样；点分名 foo.bar → foo/bar
-    if (modPath.find('/') == std::string::npos)
-        std::replace(modPath.begin(), modPath.end(), '.', '/');
-    fs::path moduleDir = fs::path(stdlibRoot) / modPath;
-    if (!fs::is_directory(moduleDir))
+    fs::path moduleDir = plangResolveModuleDir(path, stdlibRoot);
+    if (moduleDir.empty())
     {
-        // 标准库未命中：尝试用户包根（pvp 安装的第三方包）
-        moduleDir = fs::path(plangGetPvpRoot()) / modPath;
-        if (!fs::is_directory(moduleDir))
-        {
-            resolved.insert(path); // 模块不存在：静默忽略
-            return;
-        }
+        resolved.insert(path); // 模块不存在：静默忽略
+        return;
     }
 
     importStack.push_back(path);

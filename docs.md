@@ -47,12 +47,38 @@ plc clean [dir]     # 清理构建产物
 ## 包的引用
 使用 `import` 引入其他包的符号:
 ```plang
-import std.vector;
+import std.vector;          // 标准库
+import repo;                // 第三方包：别名（pvp 安装时登记）
+import github.com/user/repo; // 第三方包：完整仓库地址
 using vec = vector.vec<i32>;
 ```
 `import` 用于引入, `using` 用于类型别名, 二者职责不同.
 顶层符号(函数/结构体/类型)默认仅包内可见, 显式 `pub` 修饰后对外公开.
 禁止循环依赖: A 包 import B 包且 B 包 import A 包时, 编译报错.
+
+### 第三方包（pvp）
+
+第三方包由 [pvp](https://github.com/) 管理，安装到用户级包根（macOS
+`~/Library/Application Support/pLang/0.x/packages/`，Linux `~/.local/share/...`，
+Windows `%LOCALAPPDATA%\...`，`PLANG_PVP` 可覆盖）。
+
+- **安装必须用完整仓库地址**：`pvp install github.com/user/repo`（别名不能用于安装）
+- **import 用别名**：`import repo;`，编译器查 `<包根>/installed.json`（别名→仓库地址）解析
+- 包作者在自己仓库写 `pLangLists.json` 清单：`repo`（仓库地址）、`alias`（别名）、`name`/`version`/`author`
+- 包内 `.plang` 用别名声明：`package repo;`
+
+```plang
+package repo;                  // 别名（与清单 alias 一致）
+pub func shout(var -> var: char s) -> var: ptr { ... }
+```
+
+```plang
+import repo;
+func main() : int {
+    io.println(repo.shout("hi"));   // 调用用别名
+    return 0;
+}
+```
 
 # 类型系统
 ## 变量修饰

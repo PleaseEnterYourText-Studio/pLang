@@ -241,20 +241,11 @@ void resolveModule(ProgramNode* hostProgram, const std::string& path, const std:
         }
     }
 
-    std::string modPath = path;
-    // 完整地址（含 /，如 github.com/user/repo）保留原样；点分名 foo.bar → foo/bar
-    if (modPath.find('/') == std::string::npos)
-        std::replace(modPath.begin(), modPath.end(), '.', '/');
-    fs::path moduleDir = fs::path(stdlibRoot) / modPath;
-    if (!fs::is_directory(moduleDir))
+    fs::path moduleDir = plangResolveModuleDir(path, stdlibRoot);
+    if (moduleDir.empty())
     {
-        // 标准库未命中：尝试用户包根（pvp 安装的第三方包）
-        moduleDir = fs::path(plangGetPvpRoot()) / modPath;
-        if (!fs::is_directory(moduleDir))
-        {
-            resolved.insert(path); // 模块不存在：静默忽略（保持现状）
-            return;
-        }
+        resolved.insert(path); // 模块不存在：静默忽略（保持现状）
+        return;
     }
 
     importStack.push_back(path);
@@ -518,16 +509,8 @@ bool compileUnit(const std::vector<std::string>& sources, bool keepIntermediate,
     // 4) 独立编译每个导入的库包为 .o（与主模块链接）
     for (const auto& pkg : packages)
     {
-        std::string pkgPath = pkg;
-        if (pkgPath.find('/') == std::string::npos)
-            std::replace(pkgPath.begin(), pkgPath.end(), '.', '/');
-        fs::path pkgDir = fs::path(stdlibRoot) / pkgPath;
-        if (!fs::is_directory(pkgDir))
-        {
-            // 第三方包：pvp 用户包根
-            pkgDir = fs::path(plangGetPvpRoot()) / pkgPath;
-        }
-        if (!fs::is_directory(pkgDir)) continue;
+        fs::path pkgDir = plangResolveModuleDir(pkg, stdlibRoot);
+        if (pkgDir.empty()) continue;
         std::vector<std::string> pkgFiles;
         for (const auto& entry : fs::directory_iterator(pkgDir))
         {
