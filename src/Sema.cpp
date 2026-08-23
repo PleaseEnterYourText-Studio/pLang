@@ -1224,12 +1224,59 @@ std::string Sema::visitExpr(ASTNode* node)
     }
 }
 
+// 运算符重载：二元运算符 → 方法名（返回空串表示不支持）
+static const char* binaryOpMethodName(BinaryOpType op)
+{
+    switch (op) {
+        case BinaryOpType::ADD: return "opAdd";
+        case BinaryOpType::SUB: return "opSub";
+        case BinaryOpType::MUL: return "opMul";
+        case BinaryOpType::DIV: return "opDiv";
+        case BinaryOpType::MOD: return "opMod";
+        default: return "";
+    }
+}
+
+static const char* comparisonOpMethodName(ComparisonOpType op)
+{
+    switch (op) {
+        case ComparisonOpType::EQ: return "opEq";
+        case ComparisonOpType::NE: return "opNe";
+        case ComparisonOpType::LT: return "opLt";
+        case ComparisonOpType::LE: return "opLe";
+        case ComparisonOpType::GT: return "opGt";
+        case ComparisonOpType::GE: return "opGe";
+    }
+    return "";
+}
+
+// 左右类型中哪个是定义了 opName 方法的结构体，返回其类型名（无则空串）
+std::string Sema::structWithOperator(const std::string& leftType, const std::string& rightType,
+                                     const std::string& opName) const
+{
+    if (opName.empty()) return "";
+    auto has = [&](const std::string& t) -> bool {
+        auto it = structRegistry.find(t);
+        return it != structRegistry.end() && it->second.methods.count(opName);
+    };
+    if (has(leftType)) return leftType;
+    if (has(rightType)) return rightType;
+    return "";
+}
+
 std::string Sema::visitBinary(BinaryOpNode* node)
 {
     std::string leftType = visitExpr(node->lift.get());
     std::string rightType = visitExpr(node->right.get());
     if (!leftType.empty() && !rightType.empty())
     {
+        // 运算符重载：结构体定义 opAdd 等
+        const char* opName = binaryOpMethodName(node->op);
+        std::string target = structWithOperator(leftType, rightType, opName ? opName : "");
+        if (!target.empty())
+        {
+            return structRegistry.at(target).methods.at(opName).first;
+        }
         // 指针算术：pointer +- int → pointer（按元素大小缩放）
         bool leftPtr = leftType == "pointer" || leftType == "ptr";
         bool rightPtr = rightType == "pointer" || rightType == "ptr";
@@ -1268,8 +1315,15 @@ std::string Sema::visitUnary(UnaryOpNode* node)
 
 std::string Sema::visitComparison(ComparisonOpNode* node)
 {
-    visitExpr(node->lift.get());
-    visitExpr(node->right.get());
+    std::string leftType = visitExpr(node->lift.get());
+    std::string rightType = visitExpr(node->right.get());
+    // 运算符重载：结构体定义 opEq/opLt 等
+    const char* opName = comparisonOpMethodName(node->op);
+    std::string target = structWithOperator(leftType, rightType, opName ? opName : "");
+    if (!target.empty())
+    {
+        return structRegistry.at(target).methods.at(opName).first;
+    }
     return "bool";
 }
 

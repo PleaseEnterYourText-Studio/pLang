@@ -105,6 +105,8 @@ private:
     void visitLabel(LabelStmtNode* node);
     void visitBreak(BreakStmtNode* node);
     void visitContinue(ContinueStmtNode* node);
+    std::string structWithOperator(const std::string& leftType, const std::string& rightType,
+                                   const std::string& opName) const;
     void visitSwitch(SwitchStmtNode* node);
     void visitReturn(ReturnStmtNode* node);
     void visitExprStmt(ExpressionStmtNode* node);

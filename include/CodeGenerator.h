@@ -64,6 +64,10 @@ private:
     // 调用点参数类型转换（C 式隐式转换）
     llvm::Value* coerceValue(llvm::Value* val, llvm::Type* targetTy);
 
+    // 运算符重载：二元/比较运算符在结构体操作数上派发到 opAdd/opEq 等方法
+    llvm::Value* generateOpDispatch(const std::string& opName,
+                                    ASTNode* leftNode, ASTNode* rightNode);
+
     // 结构体类型注册表：名字 → LLVM 结构体类型 + 字段信息（按声明顺序）
     struct StructDef
     {

@@ -18,6 +18,10 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Intrinsics.h"
 
+// 运算符 → 重载方法名（空串表示不支持）
+static const char* binaryOpMethodName(BinaryOpType op);
+static const char* comparisonOpMethodName(ComparisonOpType op);
+
 // 类型大小（字节）：用于 union 取最大字段
 static unsigned typeSizeBytes(llvm::Type* ty);
 
@@ -236,6 +240,13 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
         case ASTNodeType::BINARY_OP: {
             auto* bin = static_cast<BinaryOpNode*>(node);
+            // 运算符重载：结构体 opAdd/opSub 等
+            const char* opName = binaryOpMethodName(bin->op);
+            if (opName)
+            {
+                llvm::Value* ov = generateOpDispatch(opName, bin->lift.get(), bin->right.get());
+                if (ov) return ov;
+            }
             auto* left = generateExpression(bin->lift.get());
             auto* right = generateExpression(bin->right.get());
             if (!left || !right) break;
@@ -354,6 +365,13 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
         case ASTNodeType::COMPARISON_OP: {
             auto* comp = static_cast<ComparisonOpNode*>(node);
+            // 运算符重载：结构体 opEq/opLt 等
+            const char* opName = comparisonOpMethodName(comp->op);
+            if (opName)
+            {
+                llvm::Value* ov = generateOpDispatch(opName, comp->lift.get(), comp->right.get());
+                if (ov) return ov;
+            }
             auto* left = generateExpression(comp->lift.get());
             auto* right = generateExpression(comp->right.get());
             if (!left || !right) break;
@@ -1060,7 +1078,6 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
     collectLabelBlocks(fn->body.get(), func);
 
     // 参数绑定（方法首参为 this）
-    size_t argIdx = 0;
     if (isMethod)
     {
         auto& thisArg = *func->arg_begin();
@@ -1076,11 +1093,15 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
         builder.SetCurrentDebugLocation(
             llvm::DILocation::get(context, fn->line, 0, currentSubprogram));
         emitDbgDeclare("this", thisAlloca, thisArg.getType(), fn->line, true, 1);
-        argIdx = 1;
     }
-    for (auto& arg : func->args()) {
-        size_t paramIdx = argIdx - (isMethod ? 1 : 0);
-        if ((!isMethod || argIdx >= 1) && paramIdx < fn->params.size()) {
+    size_t loopIdx = 0;
+    for (auto& arg : func->args())
+    {
+        // 方法的第一个 LLVM 实参是 this（已单独绑定），跳过
+        if (isMethod && loopIdx == 0) { ++loopIdx; continue; }
+        size_t paramIdx = isMethod ? loopIdx - 1 : loopIdx;
+        if (paramIdx < fn->params.size())
+        {
             auto* param = fn->params[paramIdx].get();
             llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, param->name);
             builder.CreateStore(&arg, alloca);
@@ -1089,12 +1110,13 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
             if (param->type && param->type->baseType == ASTNodeType::TYPE_POINTER && param->type->inner) {
                 namedValueElementTypes[param->name] = getLLVMType(param->type->inner.get());
             }
-            // 参数登记进 DWARF
+            // 参数登记进 DWARF（方法 this 占 1 号，实参从 2 号起）
             builder.SetCurrentDebugLocation(
                 llvm::DILocation::get(context, param->line, 0, currentSubprogram));
-            emitDbgDeclare(param->name, alloca, arg.getType(), param->line, true, paramIdx + 1);
+            emitDbgDeclare(param->name, alloca, arg.getType(), param->line, true,
+                           (isMethod ? 1 : 0) + paramIdx + 1);
         }
-        ++argIdx;
+        ++loopIdx;
     }
 
     generateStatement(fn->body.get());
@@ -1622,6 +1644,98 @@ llvm::Value* CodeGenerator::coerceValue(llvm::Value* val, llvm::Type* targetTy)
     if (srcTy->isFloatingPointTy() && targetTy->isIntegerTy())
         return builder.CreateFPToSI(val, targetTy, "argCast");
     return val;
+}
+
+// 运算符 → 重载方法名（空串表示不支持）
+static const char* binaryOpMethodName(BinaryOpType op)
+{
+    switch (op) {
+        case BinaryOpType::ADD: return "opAdd";
+        case BinaryOpType::SUB: return "opSub";
+        case BinaryOpType::MUL: return "opMul";
+        case BinaryOpType::DIV: return "opDiv";
+        case BinaryOpType::MOD: return "opMod";
+        default: return "";
+    }
+}
+
+static const char* comparisonOpMethodName(ComparisonOpType op)
+{
+    switch (op) {
+        case ComparisonOpType::EQ: return "opEq";
+        case ComparisonOpType::NE: return "opNe";
+        case ComparisonOpType::LT: return "opLt";
+        case ComparisonOpType::LE: return "opLe";
+        case ComparisonOpType::GT: return "opGt";
+        case ComparisonOpType::GE: return "opGe";
+    }
+    return "";
+}
+
+// 运算符重载派发：左右操作数是定义了 opName 方法的结构体变量时，生成方法调用
+llvm::Value* CodeGenerator::generateOpDispatch(const std::string& opName,
+                                               ASTNode* leftNode, ASTNode* rightNode)
+{
+    struct OpInfo { std::string var; llvm::Type* ty = nullptr; };
+    OpInfo l, r;
+    if (leftNode && leftNode->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = static_cast<VariableRefNode*>(leftNode);
+        auto it = namedValues.find(ref->name);
+        if (it != namedValues.end()) { l.var = ref->name; l.ty = it->second.type; }
+    }
+    if (rightNode && rightNode->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = static_cast<VariableRefNode*>(rightNode);
+        auto it = namedValues.find(ref->name);
+        if (it != namedValues.end()) { r.var = ref->name; r.ty = it->second.type; }
+    }
+
+    llvm::Function* mf = nullptr;
+    llvm::Value* thisPtr = nullptr;
+    ASTNode* argNode = nullptr;
+    if (l.ty && l.ty->isStructTy())
+    {
+        std::string sn = structNameOf(l.ty);
+        if (!sn.empty())
+        {
+            mf = module->getFunction(sn + "." + opName);
+            if (mf) { thisPtr = namedValues[l.var].ptr; argNode = rightNode; }
+        }
+    }
+    if (!mf && r.ty && r.ty->isStructTy())
+    {
+        std::string sn = structNameOf(r.ty);
+        if (!sn.empty())
+        {
+            mf = module->getFunction(sn + "." + opName);
+            if (mf) { thisPtr = namedValues[r.var].ptr; argNode = leftNode; }
+        }
+    }
+    if (!mf || !thisPtr || !argNode) return nullptr;
+
+    // 方法参数是 var -> var: Type（指针），须传操作数地址
+    llvm::Value* argPtr = nullptr;
+    if (argNode->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = static_cast<VariableRefNode*>(argNode);
+        auto it = namedValues.find(ref->name);
+        if (it != namedValues.end()) argPtr = it->second.ptr;
+    }
+    if (!argPtr)
+    {
+        llvm::Value* av = generateExpression(argNode);
+        if (!av) return nullptr;
+        llvm::Type* ty = av->getType();
+        llvm::AllocaInst* tmp = builder.CreateAlloca(ty, nullptr, "oparg");
+        builder.CreateStore(av, tmp);
+        argPtr = tmp;
+    }
+
+    std::vector<llvm::Value*> args;
+    args.push_back(thisPtr);
+    args.push_back(argPtr);
+    return builder.CreateCall(mf, args, "opcall");
 }
 
 // 指针操作数的元素类型（变量已知指向类型时返回之，否则按 i8 字节寻址）
