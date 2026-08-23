@@ -71,7 +71,6 @@ private:
     std::unique_ptr<ASTNode> parseIf();
     std::unique_ptr<ASTNode> parseWhile();
     std::unique_ptr<ASTNode> parseFor();
-    std::unique_ptr<ASTNode> parseDoWhile();
     std::unique_ptr<ASTNode> parseGoto();
     std::unique_ptr<ASTNode> parseLabel();
     std::unique_ptr<ASTNode> parseBreak();

@@ -52,7 +52,6 @@ void Lexer::initKeywords()
         {"break", TokenType::BREAK},
         {"continue", TokenType::CONTINUE},
         {"sizeof", TokenType::SIZEOF},
-        {"do", TokenType::DO},
         {"lambda", TokenType::LAMBDA},
         {"int", TokenType::INT},
         {"char", TokenType::CHAR},

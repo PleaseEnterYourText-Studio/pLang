@@ -821,7 +821,7 @@ llvm::json::Value LspServer::getSemanticTokens(const std::string& uri)
             case TokenType::PUB: case TokenType::PRT: case TokenType::PRI:
             case TokenType::THIS: case TokenType::THIS_TYPE: case TokenType::TYPE:
             case TokenType::AS: case TokenType::IF: case TokenType::ELSE:
-            case TokenType::WHILE: case TokenType::FOR: case TokenType::DO:
+            case TokenType::WHILE: case TokenType::FOR:
                 return 0;
             // 类型（内置类型名）
             case TokenType::INT: case TokenType::CHAR: case TokenType::STRING_TYPE:

@@ -103,6 +103,8 @@ private:
     llvm::DIFile* debugFile = nullptr;          // DWARF 编译单元文件
     std::string sourceFileName = "main.plang";  // DWARF 源文件名
     llvm::DIType* getDebugType(llvm::Type* ty); // LLVM 类型映射为 DWARF 类型
+    llvm::DIType* getStructDebugType(const std::string& sname); // 结构体 → DICompositeType（含字段）
+    std::unordered_map<std::string, llvm::DIType*> debugTypeCache;   // 结构体 DWARF 类型缓存
     void emitDbgDeclare(const std::string& name, llvm::Value* addr, llvm::Type* ty,
                         int line, bool isParam = false, unsigned argNo = 0); // llvm.dbg.declare
 

@@ -1355,9 +1355,46 @@ llvm::DIType* CodeGenerator::getDebugType(llvm::Type* ty)
     if (ty->isStructTy())
     {
         std::string sname = structNameOf(ty);
-        return dib->createUnspecifiedType(sname.empty() ? "struct" : sname);
+        return sname.empty() ? dib->createUnspecifiedType("struct") : getStructDebugType(sname);
     }
     return dib->createUnspecifiedType("opaque");
+}
+
+// 结构体 → DWARF 结构体类型（含字段成员）；递归结构体用占位类型避免死循环
+llvm::DIType* CodeGenerator::getStructDebugType(const std::string& sname)
+{
+    if (!dib || !debugFile) return nullptr;
+    auto cIt = debugTypeCache.find(sname);
+    if (cIt != debugTypeCache.end()) return cIt->second;
+    auto dIt = structDefs.find(sname);
+    if (dIt == structDefs.end()) return dib->createUnspecifiedType(sname);
+    auto& def = dIt->second;
+
+    // 先放占位：自引用/互引用字段经 getDebugType 递归时命中缓存拿到占位
+    auto* placeholder = dib->createReplaceableCompositeType(
+        llvm::dwarf::DW_TAG_structure_type, sname, debugCU, debugFile, 0);
+    debugTypeCache[sname] = placeholder;
+
+    std::vector<llvm::Metadata*> elems;
+    uint64_t offBits = 0;
+    for (size_t i = 0; i < def.fieldNames.size(); ++i)
+    {
+        llvm::Type* fty = def.fieldTypes[i];
+        llvm::DIType* fdbg = getDebugType(fty);
+        uint64_t fsize = module->getDataLayout().getTypeAllocSizeInBits(fty);
+        uint64_t falign = module->getDataLayout().getABITypeAlign(fty).value();
+        elems.push_back(dib->createMemberType(debugCU, def.fieldNames[i], debugFile, 0,
+                                              fsize, falign, offBits, llvm::DINode::FlagZero, fdbg));
+        offBits += fsize;
+    }
+    uint64_t totalSize = module->getDataLayout().getTypeAllocSizeInBits(def.type);
+    uint64_t totalAlign = module->getDataLayout().getABITypeAlign(def.type).value();
+    auto* real = dib->createStructType(debugCU, sname, debugFile, 0, totalSize, totalAlign,
+                                       llvm::DINode::FlagZero, nullptr,
+                                       dib->getOrCreateArray(elems));
+    placeholder->replaceAllUsesWith(real);
+    debugTypeCache[sname] = real;
+    return real;
 }
 
 // llvm.dbg.declare：alloca 绑定 DWARF 变量（参数用 DW_TAG_formal_parameter）

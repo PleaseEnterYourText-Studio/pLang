@@ -49,7 +49,6 @@ enum class ASTNodeType
     TYPE_PARAM,
     TEMPLATE_DECL,
     ENUM_DECL,
-    DO_WHILE_STMT,
     BREAK_STMT,
     CONTINUE_STMT,
     GOTO_STMT,
@@ -588,15 +587,6 @@ struct EnumDeclNode : ASTNode
 // 作为后续功能实现的设计参考，构造函数已补全内联实现
 
 // do-while 语句
-struct DoWhileStmtNode : ASTNode
-{
-    std::unique_ptr<ASTNode> condition;
-    std::unique_ptr<ASTNode> body;
-
-    DoWhileStmtNode(std::unique_ptr<ASTNode> condition, std::unique_ptr<ASTNode> body, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::WHILE_STMT, line, column), condition(std::move(condition)), body(std::move(body)) {}
-};
-
 // 成员访问
 struct MemberAccessNode : ASTNode
 {

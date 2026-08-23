@@ -746,7 +746,6 @@ std::unique_ptr<ASTNode> Parser::parseStatement()
     if (check(TokenType::IF)) return parseIf();
     if (check(TokenType::WHILE)) return parseWhile();
     if (check(TokenType::FOR)) return parseFor();
-    if (check(TokenType::DO)) return parseDoWhile();
     if (check(TokenType::GOTO)) return parseGoto();
     if (check(TokenType::LABEL)) return parseLabel();
     if (check(TokenType::BREAK)) return parseBreak();
@@ -993,18 +992,6 @@ std::unique_ptr<ASTNode> Parser::parseFor()
     auto body = parseStatement();
     return std::make_unique<ForStmtNode>(std::move(init), std::move(cond), std::move(update),
                                          std::move(body), start.line, start.column);
-}
-
-std::unique_ptr<ASTNode> Parser::parseDoWhile()
-{
-    Token start = expect(TokenType::DO, "expected do");
-    auto body = parseStatement();
-    expect(TokenType::WHILE, "expected while");
-    expect(TokenType::LPAREN, "expected (");
-    auto cond = parseExpression();
-    expect(TokenType::RPAREN, "expected )");
-    expect(TokenType::SEMICOLON, "expected ;");
-    return std::make_unique<WhileStmtNode>(std::move(cond), std::move(body), start.line, start.column);
 }
 
 std::unique_ptr<ASTNode> Parser::parseGoto()
