@@ -49,6 +49,8 @@ enum class ASTNodeType
     TYPE_PARAM,
     TEMPLATE_DECL,
     DO_WHILE_STMT,
+    BREAK_STMT,
+    CONTINUE_STMT,
     GOTO_STMT,
     LABEL_STMT,
     SWITCH_STMT,
@@ -406,6 +408,20 @@ struct GotoStmtNode : ASTNode
 
     GotoStmtNode(const std::string& label, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::GOTO_STMT, line, column), label(label) {}
+};
+
+// break 语句（跳出当前循环）
+struct BreakStmtNode : ASTNode
+{
+    BreakStmtNode(int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::BREAK_STMT, line, column) {}
+};
+
+// continue 语句（跳到当前循环的更新/条件处）
+struct ContinueStmtNode : ASTNode
+{
+    ContinueStmtNode(int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::CONTINUE_STMT, line, column) {}
 };
 
 // label 语句

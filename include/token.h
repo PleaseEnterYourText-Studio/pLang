@@ -22,7 +22,7 @@ enum class TokenType
     THIS, THIS_TYPE, TYPE,
     AS,
     IF, ELSE, WHILE, FOR, DO, ASM,
-    GOTO, LABEL, SWITCH, CASE, DEFAULT,
+    GOTO, LABEL, SWITCH, CASE, DEFAULT, BREAK, CONTINUE,
     SIZEOF,      // sizeof(T) 类型大小
     EXTERN,      // extern func 声明（FFI）
     NULL_LIT,    // null 空指针字面量
@@ -82,7 +82,7 @@ public:
             {TokenType::THIS, "THIS"}, {TokenType::THIS_TYPE, "THIS_TYPE"}, {TokenType::TYPE, "TYPE"},
             {TokenType::AS, "AS"},
             {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"}, {TokenType::ASM, "ASM"},
-            {TokenType::GOTO, "GOTO"}, {TokenType::LABEL, "LABEL"}, {TokenType::SWITCH, "SWITCH"}, {TokenType::CASE, "CASE"}, {TokenType::DEFAULT, "DEFAULT"},
+            {TokenType::GOTO, "GOTO"}, {TokenType::LABEL, "LABEL"}, {TokenType::SWITCH, "SWITCH"}, {TokenType::CASE, "CASE"}, {TokenType::DEFAULT, "DEFAULT"}, {TokenType::BREAK, "BREAK"}, {TokenType::CONTINUE, "CONTINUE"},
             {TokenType::SIZEOF, "SIZEOF"},
             {TokenType::EXTERN, "EXTERN"}, {TokenType::NULL_LIT, "NULL_LIT"},
             {TokenType::INT, "INT"}, {TokenType::CHAR, "CHAR"}, {TokenType::STRING_TYPE, "STRING_TYPE"}, {TokenType::WCHAR, "WCHAR"}, {TokenType::WSTRING, "WSTRING"}, {TokenType::BOOL, "BOOL"},

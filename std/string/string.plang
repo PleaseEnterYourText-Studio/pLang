@@ -282,11 +282,11 @@ pub func parseInt(var -> var: char s, val: int base) : i64 {
         var: char c = s[i];
         var: int d = -1;
         if (c >= '0' && c <= '9') {
-            d = int as c - int as '0';
+            d = (int as c) - (int as '0');
         } else if (c >= 'a' && c <= 'f') {
-            d = int as c - int as 'a' + 10;
+            d = (int as c) - (int as 'a') + 10;
         } else if (c >= 'A' && c <= 'F') {
-            d = int as c - int as 'A' + 10;
+            d = (int as c) - (int as 'A') + 10;
         }
         if (d < 0 || d >= base) {
             i = sl;

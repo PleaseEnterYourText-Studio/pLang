@@ -382,14 +382,30 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
 
         case ASTNodeType::LOGICAL_OP: {
             auto* logic = static_cast<LogicalOpNode*>(node);
-            auto* left = generateExpression(logic->lift.get());
-            auto* right = generateExpression(logic->right.get());
-
-            switch (logic->op) {
-                case LogicalOpType::AND: return builder.CreateAnd(left, right, "and");
-                case LogicalOpType::OR: return builder.CreateOr(left, right, "or");
+            // 短路求值：a && b / a || b。左侧先算，根据结果决定是否求值右侧。
+            llvm::Value* left = generateExpression(logic->lift.get());
+            if (!left) return nullptr;
+            llvm::Function* fn = builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* curBB = builder.GetInsertBlock();
+            llvm::BasicBlock* rhsBB = llvm::BasicBlock::Create(context, "logic.rhs", fn);
+            llvm::BasicBlock* endBB = llvm::BasicBlock::Create(context, "logic.end", fn);
+            if (logic->op == LogicalOpType::AND) {
+                // left 为 true 才求右侧；否则直接得 false
+                builder.CreateCondBr(left, rhsBB, endBB);
+            } else {
+                // left 为 true 直接得 true；否则求右侧
+                builder.CreateCondBr(left, endBB, rhsBB);
             }
-            break;
+            builder.SetInsertPoint(rhsBB);
+            llvm::Value* right = generateExpression(logic->right.get());
+            if (!right) return nullptr;
+            llvm::BasicBlock* rhsEndBB = builder.GetInsertBlock();
+            builder.CreateBr(endBB);
+            builder.SetInsertPoint(endBB);
+            llvm::PHINode* phi = builder.CreatePHI(builder.getInt1Ty(), 2, "logic");
+            phi->addIncoming(left, curBB);
+            phi->addIncoming(right, rhsEndBB);
+            return phi;
         }
 
         case ASTNodeType::CAST: {
@@ -723,6 +739,18 @@ void CodeGenerator::generateStatement(ASTNode* node)
         }
         case ASTNodeType::GOTO_STMT: { generateGoto(static_cast<GotoStmtNode*>(node)); break; }
         case ASTNodeType::LABEL_STMT: { generateLabel(static_cast<LabelStmtNode*>(node)); break; }
+        case ASTNodeType::BREAK_STMT: {
+            if (!loopContext.empty()) {
+                builder.CreateBr(loopContext.back().second);
+            }
+            break;
+        }
+        case ASTNodeType::CONTINUE_STMT: {
+            if (!loopContext.empty()) {
+                builder.CreateBr(loopContext.back().first);
+            }
+            break;
+        }
         case ASTNodeType::SWITCH_STMT: { generateSwitch(static_cast<SwitchStmtNode*>(node)); break; }
 
         case ASTNodeType::ASM_STMT: {
@@ -843,7 +871,9 @@ void CodeGenerator::generateStatement(ASTNode* node)
             builder.CreateCondBr(cond, bodyBB, mergeBB);
 
             builder.SetInsertPoint(bodyBB);
+            loopContext.push_back({condBB, mergeBB});
             generateStatement(whileStmt->body.get());
+            loopContext.pop_back();
             if (!builder.GetInsertBlock()->getTerminator()) {
                 builder.CreateBr(condBB);
             }
@@ -874,7 +904,9 @@ void CodeGenerator::generateStatement(ASTNode* node)
             builder.CreateCondBr(cond, bodyBB, mergeBB);
 
             builder.SetInsertPoint(bodyBB);
+            loopContext.push_back({updateBB, mergeBB});
             generateStatement(forStmt->body.get());
+            loopContext.pop_back();
             if (!builder.GetInsertBlock()->getTerminator()) {
                 builder.CreateBr(updateBB);
             }

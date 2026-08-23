@@ -106,6 +106,9 @@ private:
     void generateLabel(LabelStmtNode* node);
     void generateSwitch(SwitchStmtNode* node);
 
+    // 循环上下文栈：{continue目标块, break目标块}（break/continue 用）
+    std::vector<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> loopContext;
+
     // std.thread 内置调用生成
     llvm::Value* generateThreadBuiltin(FunctionCallNode* call);
     // std.atomic 原子内置调用生成

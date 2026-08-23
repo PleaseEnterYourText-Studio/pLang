@@ -648,6 +648,8 @@ std::unique_ptr<ASTNode> Parser::parseStatement()
     if (check(TokenType::DO)) return parseDoWhile();
     if (check(TokenType::GOTO)) return parseGoto();
     if (check(TokenType::LABEL)) return parseLabel();
+    if (check(TokenType::BREAK)) return parseBreak();
+    if (check(TokenType::CONTINUE)) return parseContinue();
     if (check(TokenType::SWITCH)) return parseSwitch();
     if (check(TokenType::RETURN)) return parseReturn();
     if (check(TokenType::ASM)) return parseAsm();
@@ -918,6 +920,20 @@ std::unique_ptr<ASTNode> Parser::parseLabel()
     Token name = expect(TokenType::IDENT, "expected label name");
     expect(TokenType::SEMICOLON, "expected ; after label");
     return std::make_unique<LabelStmtNode>(name.text, start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseBreak()
+{
+    Token start = expect(TokenType::BREAK, "expected break");
+    expect(TokenType::SEMICOLON, "expected ; after break");
+    return std::make_unique<BreakStmtNode>(start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseContinue()
+{
+    Token start = expect(TokenType::CONTINUE, "expected continue");
+    expect(TokenType::SEMICOLON, "expected ; after continue");
+    return std::make_unique<ContinueStmtNode>(start.line, start.column);
 }
 
 std::unique_ptr<ASTNode> Parser::parseSwitch()

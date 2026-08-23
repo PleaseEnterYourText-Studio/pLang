@@ -433,6 +433,12 @@ void Sema::visitStmt(ASTNode* node)
         case ASTNodeType::LABEL_STMT:
             visitLabel(dynamic_cast<LabelStmtNode*>(node));
             break;
+        case ASTNodeType::BREAK_STMT:
+            visitBreak(dynamic_cast<BreakStmtNode*>(node));
+            break;
+        case ASTNodeType::CONTINUE_STMT:
+            visitContinue(dynamic_cast<ContinueStmtNode*>(node));
+            break;
         case ASTNodeType::SWITCH_STMT:
             visitSwitch(dynamic_cast<SwitchStmtNode*>(node));
             break;
@@ -472,10 +478,11 @@ std::unique_ptr<TypeNode> Sema::substituteType(TypeNode* t,
             std::string replaced = t->name;
             for (size_t i = 0; i < params.size(); ++i)
             {
-                size_t at;
-                while ((at = replaced.find(params[i])) != std::string::npos)
+                size_t at = 0;
+                while ((at = replaced.find(params[i], at)) != std::string::npos)
                 {
                     replaced.replace(at, params[i].size(), args[i]);
+                    at += args[i].size();   // 跳过刚替换的内容，恒等替换也能终止
                 }
             }
             return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, replaced, t->line, t->column);
@@ -570,6 +577,16 @@ std::unique_ptr<ASTNode> Sema::cloneStmt(ASTNode* n,
         {
             auto* s = dynamic_cast<LabelStmtNode*>(n);
             return std::make_unique<LabelStmtNode>(s->name, s->line, s->column);
+        }
+        case ASTNodeType::BREAK_STMT:
+        {
+            auto* s = dynamic_cast<BreakStmtNode*>(n);
+            return std::make_unique<BreakStmtNode>(s->line, s->column);
+        }
+        case ASTNodeType::CONTINUE_STMT:
+        {
+            auto* s = dynamic_cast<ContinueStmtNode*>(n);
+            return std::make_unique<ContinueStmtNode>(s->line, s->column);
         }
         case ASTNodeType::SWITCH_STMT:
         {
@@ -674,7 +691,28 @@ std::unique_ptr<ASTNode> Sema::cloneExpr(ASTNode* n,
             auto* e = dynamic_cast<FunctionCallNode*>(n);
             std::vector<std::unique_ptr<ASTNode>> argsClone;
             for (auto& a : e->arguments) argsClone.push_back(cloneExpr(a.get(), params, args));
-            return std::make_unique<FunctionCallNode>(e->name, std::move(argsClone), e->line, e->column);
+            std::string callName = e->name;
+            // 泛型调用名中的类型参数也要替换：foo<T> → foo<int>（否则克隆体内残留字面 T）
+            if (callName.find('<') != std::string::npos)
+            {
+                size_t lt = callName.find('<');
+                size_t gt = callName.rfind('>');
+                if (gt != std::string::npos)
+                {
+                    std::string typeArgs = callName.substr(lt + 1, gt - lt - 1);
+                    for (size_t i = 0; i < params.size(); ++i)
+                    {
+                        size_t at = 0;
+                        while ((at = typeArgs.find(params[i], at)) != std::string::npos)
+                        {
+                            typeArgs.replace(at, params[i].size(), args[i]);
+                            at += args[i].size();
+                        }
+                    }
+                    callName = callName.substr(0, lt + 1) + typeArgs + callName.substr(gt);
+                }
+            }
+            return std::make_unique<FunctionCallNode>(callName, std::move(argsClone), e->line, e->column);
         }
         case ASTNodeType::INDEX:
         {
@@ -945,11 +983,29 @@ void Sema::visitIf(IfStmtNode* node)
 
 void Sema::visitWhile(WhileStmtNode* node)
 {
+    loopDepth++;
     if (node->condition)
     {
         visitExpr(node->condition.get());
     }
     if (node->body) visitStmt(node->body.get());
+    loopDepth--;
+}
+
+void Sema::visitBreak(BreakStmtNode* node)
+{
+    if (loopDepth <= 0)
+    {
+        error(node->line, node->column, "'break' used outside of a loop");
+    }
+}
+
+void Sema::visitContinue(ContinueStmtNode* node)
+{
+    if (loopDepth <= 0)
+    {
+        error(node->line, node->column, "'continue' used outside of a loop");
+    }
 }
 
 void Sema::collectLabels(ASTNode* node)
@@ -1026,10 +1082,12 @@ void Sema::visitSwitch(SwitchStmtNode* node)
 void Sema::visitFor(ForStmtNode* node)
 {
     symbols.pushScope();
+    loopDepth++;
     if (node->init) visitStmt(node->init.get());
     if (node->condition) visitExpr(node->condition.get());
     if (node->update) visitExpr(node->update.get());
     if (node->body) visitStmt(node->body.get());
+    loopDepth--;
     symbols.popScope();
 }
 
@@ -1127,6 +1185,13 @@ std::string Sema::visitExpr(ASTNode* node)
             auto* sz = dynamic_cast<SizeofExprNode*>(node);
             if (sz->targetType) visitExpr(nullptr); // 类型校验在 CodeGenerator 处理（大小按 LLVM 类型）
             return "int";
+        }
+        case ASTNodeType::BLOCK_STMT:
+        {
+            // 初始化列表 {a, b, {c}}：逐个访问元素（类型检查 + 包限定调用重命名）
+            auto* block = dynamic_cast<BlockStmtNode*>(node);
+            for (auto& elem : block->statements) visitExpr(elem.get());
+            return "";
         }
         default: return "";
     }

@@ -73,6 +73,7 @@ private:
     std::set<std::string> functionLabels;   // 当前函数的 label 集合
     std::string currentStruct;              // 当前方法所属结构体（空=自由函数）
     std::set<std::string> duplicateLabels;  // 重复 label 检测
+    int loopDepth = 0;                      // 当前循环嵌套深度（break/continue 校验）
     std::set<std::string> currentLocals;    // 当前函数内声明的局部变量（借用检查）
 
 public:
@@ -100,6 +101,8 @@ private:
     void visitFor(ForStmtNode* node);
     void visitGoto(GotoStmtNode* node);
     void visitLabel(LabelStmtNode* node);
+    void visitBreak(BreakStmtNode* node);
+    void visitContinue(ContinueStmtNode* node);
     void visitSwitch(SwitchStmtNode* node);
     void visitReturn(ReturnStmtNode* node);
     void visitExprStmt(ExpressionStmtNode* node);

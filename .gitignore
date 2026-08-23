@@ -6,3 +6,4 @@ build/
 .vscode/
 *.o
 *.ll
+/cmake-build-make/
