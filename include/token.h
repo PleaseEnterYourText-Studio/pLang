@@ -41,7 +41,7 @@ enum class TokenType
     EQ, NE,          // == !=
     LT, LE, GT, GE,  // < <= > >=
     AND, OR, NOT,    // && || !
-    AMP, PIPE, CARET, TILDE, SHL, SHR,  // & | ^ ~ << >>
+    AMP, PIPE, CARET, TILDE, SHL, SHR, QUESTION,  // & | ^ ~ << >> ?
     PLUS_ASSIGN, MINUS_ASSIGN, STAR_ASSIGN, SLASH_ASSIGN, PERCENT_ASSIGN, // += -= *= /= %=
     SHL_ASSIGN, SHR_ASSIGN, AMP_ASSIGN, PIPE_ASSIGN, CARET_ASSIGN,        // <<= >>= &= |= ^=
     INC, DEC,        // ++ --
@@ -95,7 +95,7 @@ public:
             {TokenType::EQ, "EQ"}, {TokenType::NE, "NE"},
             {TokenType::LT, "LT"}, {TokenType::LE, "LE"}, {TokenType::GT, "GT"}, {TokenType::GE, "GE"},
             {TokenType::AND, "AND"}, {TokenType::OR, "OR"}, {TokenType::NOT, "NOT"},
-            {TokenType::AMP, "AMP"}, {TokenType::PIPE, "PIPE"}, {TokenType::CARET, "CARET"}, {TokenType::TILDE, "TILDE"}, {TokenType::SHL, "SHL"}, {TokenType::SHR, "SHR"},
+            {TokenType::AMP, "AMP"}, {TokenType::PIPE, "PIPE"}, {TokenType::CARET, "CARET"}, {TokenType::TILDE, "TILDE"}, {TokenType::SHL, "SHL"}, {TokenType::SHR, "SHR"}, {TokenType::QUESTION, "QUESTION"},
             {TokenType::PLUS_ASSIGN, "PLUS_ASSIGN"}, {TokenType::MINUS_ASSIGN, "MINUS_ASSIGN"}, {TokenType::STAR_ASSIGN, "STAR_ASSIGN"}, {TokenType::SLASH_ASSIGN, "SLASH_ASSIGN"}, {TokenType::PERCENT_ASSIGN, "PERCENT_ASSIGN"},
             {TokenType::SHL_ASSIGN, "SHL_ASSIGN"}, {TokenType::SHR_ASSIGN, "SHR_ASSIGN"}, {TokenType::AMP_ASSIGN, "AMP_ASSIGN"}, {TokenType::PIPE_ASSIGN, "PIPE_ASSIGN"}, {TokenType::CARET_ASSIGN, "CARET_ASSIGN"},
             {TokenType::INC, "INC"}, {TokenType::DEC, "DEC"}, {TokenType::ARROW, "ARROW"}, {TokenType::AT, "AT"},

@@ -105,6 +105,7 @@ private:
     void visitWhile(WhileStmtNode* node);
     void visitFor(ForStmtNode* node);
     std::string visitLambda(LambdaExprNode* node);
+    std::string visitTry(TryExprNode* node);
     std::unordered_map<std::string, std::string> closureReturnTypes;   // 闭包变量名 → 返回类型
     void visitGoto(GotoStmtNode* node);
     void visitLabel(LabelStmtNode* node);

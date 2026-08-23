@@ -1478,6 +1478,11 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
         {
             expr = std::make_unique<UnaryOpNode>(UnaryOpType::DEC, std::move(expr));
         }
+        else if (match(TokenType::QUESTION))
+        {
+            // ? 错误传播：expr?
+            expr = std::make_unique<TryExprNode>(std::move(expr), previous().line, previous().column);
+        }
         else break;
     }
     return expr;

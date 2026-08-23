@@ -472,6 +472,9 @@ void Lexer::scanSymbol()
             if (match('=')) addToken(TokenType::CARET_ASSIGN, "^=");
             else addToken(TokenType::CARET, "^");
             break;
+        case '?':
+            addToken(TokenType::QUESTION, "?");
+            break;
         default:
             tokens.emplace_back(TokenType::ERROR, std::string(1, c), line, col);
             break;

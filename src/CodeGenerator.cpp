@@ -510,6 +510,22 @@ llvm::Value* CodeGenerator::generateExpression(ASTNode* node)
             return clo;
         }
 
+        case ASTNodeType::TRY_EXPR: {
+            // ? 错误传播：Result 结构体 field 0=isOk；错误时 return 整个 Result，否则取 field 1=value
+            auto* tryNode = static_cast<TryExprNode*>(node);
+            llvm::Value* r = generateExpression(tryNode->operand.get());
+            if (!r) return nullptr;
+            llvm::Function* fn = builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* okBB = llvm::BasicBlock::Create(context, "try.ok", fn);
+            llvm::BasicBlock* errBB = llvm::BasicBlock::Create(context, "try.err", fn);
+            llvm::Value* isOk = builder.CreateExtractValue(r, 0, "try.isok");
+            builder.CreateCondBr(isOk, okBB, errBB);
+            builder.SetInsertPoint(errBB);
+            builder.CreateRet(r);   // 错误路径：把整个 Result 返回给调用方
+            builder.SetInsertPoint(okBB);
+            return builder.CreateExtractValue(r, 1, "try.val");
+        }
+
         case ASTNodeType::BLOCK_STMT: {
             // 数组/结构体初始化 {1,2,3} —— 简化：取最后一个元素
             auto* block = static_cast<BlockStmtNode*>(node);
@@ -833,9 +849,22 @@ void CodeGenerator::generateStatement(ASTNode* node)
         case ASTNodeType::RETURN_STMT: {
             auto* ret = static_cast<ReturnStmtNode*>(node);
             if (ret->value) {
-                llvm::Value* val = generateExpression(ret->value.get());
-                if (val) {
+                // 返回结构体/数组字面量 {…}：构建到临时内存再取整值返回
+                llvm::Type* rt = currentFunction ? currentFunction->getReturnType() : nullptr;
+                if (ret->value->type == ASTNodeType::BLOCK_STMT && rt &&
+                    (rt->isStructTy() || rt->isArrayTy()))
+                {
+                    llvm::AllocaInst* tmp = builder.CreateAlloca(rt, nullptr, "retTmp");
+                    fillInitList(tmp, rt, static_cast<BlockStmtNode*>(ret->value.get()));
+                    llvm::Value* val = builder.CreateLoad(rt, tmp, "retVal");
                     builder.CreateRet(val);
+                }
+                else
+                {
+                    llvm::Value* val = generateExpression(ret->value.get());
+                    if (val) {
+                        builder.CreateRet(val);
+                    }
                 }
             } else {
                 // 无值 return：按函数返回类型（void → RetVoid；否则 ret 0）

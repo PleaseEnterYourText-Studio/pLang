@@ -62,6 +62,7 @@ enum class ASTNodeType
     SIZEOF_EXPR,
     ASM_STMT,
     LAMBDA_EXPR,
+    TRY_EXPR,
 
     // 类型
     TYPE_PRIMITIVE,
@@ -540,6 +541,15 @@ struct LambdaExprNode : ASTNode
 
     LambdaExprNode(int line = 0, int column = 0)
         : ASTNode(ASTNodeType::LAMBDA_EXPR, line, column) {}
+};
+
+// ? 错误传播：expr? —— expr 为 Result<T,E>，错误时返回当前函数的错误
+struct TryExprNode : ASTNode
+{
+    std::unique_ptr<ASTNode> operand;
+
+    TryExprNode(std::unique_ptr<ASTNode> operand, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::TRY_EXPR, line, column), operand(std::move(operand)) {}
 };
 
 // struct 声明

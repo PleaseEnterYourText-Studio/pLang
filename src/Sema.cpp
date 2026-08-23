@@ -862,6 +862,12 @@ std::unique_ptr<ASTNode> Sema::cloneExpr(ASTNode* n,
             auto* e = dynamic_cast<ThisRefNode*>(n);
             return std::make_unique<ThisRefNode>(e->line, e->column);
         }
+        case ASTNodeType::TRY_EXPR:
+        {
+            auto* e = dynamic_cast<TryExprNode*>(n);
+            return std::make_unique<TryExprNode>(cloneExpr(e->operand.get(), params, args),
+                                                 e->line, e->column);
+        }
         default:
             return nullptr;
     }
@@ -1227,8 +1233,7 @@ void Sema::visitFor(ForStmtNode* node)
 
 // lambda 闭包：检测捕获的自由变量，生成具名函数 __lambdaN（捕获变量作前置参数）
 std::string Sema::visitLambda(LambdaExprNode* node)
-{
-    std::string name = "__lambda" + std::to_string(lambdaCounter++);
+{    std::string name = "__lambda" + std::to_string(lambdaCounter++);
     node->generatedName = name;
 
     // 在 lambda 作用域分析函数体以检测捕获（currentLambda 供 visitVariableRef 记录）
@@ -1277,12 +1282,48 @@ std::string Sema::visitLambda(LambdaExprNode* node)
     return "Closure";
 }
 
+// ? 错误传播：操作数必须是 Result<T,E>，且与当前函数返回类型一致（v1）
+std::string Sema::visitTry(TryExprNode* node)
+{
+    std::string operandType = visitExpr(node->operand.get());
+    if (operandType.rfind("Result<", 0) != 0)
+    {
+        error(node->line, node->column, "'?' requires a Result value, got '" + operandType + "'");
+        return "";
+    }
+    if (currentReturnType.rfind("Result<", 0) != 0)
+    {
+        error(node->line, node->column, "'?' used in a function that does not return a Result");
+        return "";
+    }
+    if (operandType != currentReturnType)
+    {
+        error(node->line, node->column, "'?' operand type '" + operandType +
+              "' does not match function return type '" + currentReturnType + "'");
+        return "";
+    }
+    // 返回 value 类型：从 "Result<T, E>" 提取 T
+    size_t lt = operandType.find('<');
+    size_t comma = operandType.find(',', lt);
+    if (lt == std::string::npos || comma == std::string::npos)
+    {
+        error(node->line, node->column, "malformed Result type '" + operandType + "'");
+        return "";
+    }
+    std::string valueType = operandType.substr(lt + 1, comma - lt - 1);
+    while (!valueType.empty() && valueType.front() == ' ') valueType.erase(0, 1);
+    while (!valueType.empty() && valueType.back() == ' ') valueType.pop_back();
+    return valueType;
+}
+
 void Sema::visitReturn(ReturnStmtNode* node)
 {
     if (node->value)
     {
         std::string valueType = visitExpr(node->value.get());
-        if (!currentReturnType.empty())
+        // 结构体/数组字面量返回 {…}：类型由返回类型决定，跳过字面量类型检查
+        bool isInitList = (node->value->type == ASTNodeType::BLOCK_STMT);
+        if (!isInitList && !currentReturnType.empty())
         {
             if (!isCompatible(valueType, currentReturnType))
             {
@@ -1374,6 +1415,8 @@ std::string Sema::visitExpr(ASTNode* node)
         }
         case ASTNodeType::LAMBDA_EXPR:
             return visitLambda(dynamic_cast<LambdaExprNode*>(node));
+        case ASTNodeType::TRY_EXPR:
+            return visitTry(dynamic_cast<TryExprNode*>(node));
         case ASTNodeType::BLOCK_STMT:
         {
             // 初始化列表 {a, b, {c}}：逐个访问元素（类型检查 + 包限定调用重命名）
