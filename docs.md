@@ -1,21 +1,32 @@
-# 包
-## 包的声明
-一个目录为一个包, 目录内所有 `.plang` 源文件同属一个包.
-每个源文件需在顶部声明其所属包:
-```plang
-package foo;
-```
-`impl` 仅在同一包内生效, 跨包无法扩展结构体的实现.
+# 包和模块
+## 包
+### 包的声明
+一个目录为一个包, 目录内所有`.plang`源文件同属一个包.
+其中, 目录名称为包名.
 
-## 包的引用
-使用 `import` 引入其他包的符号:
+## 模块
+### 模块的声明
+一个`.plang`源文件为一个模块, 文件名为包名.
+特别的, 可以使用`mod`声明子模块.
+
+### 模块的编写
+语法如下文, 所有符号仅模块内可访问, 显式 `pub` 修饰后对外公开.
+
+### 模块的引用
+使用 `import` 引入其他模块的公开符号:
 ```plang
 import std.vector;
 using vec = vector.vec<i32>;
 ```
-`import` 用于引入, `using` 用于类型别名, 二者职责不同.
-顶层符号(函数/结构体/类型)默认仅包内可见, 显式 `pub` 修饰后对外公开.
-禁止循环依赖: A 包 import B 包且 B 包 import A 包时, 编译报错.
+禁止循环依赖: A import B 且 B import A 时, 编译报错.
+
+### 标准模块
+plang自带标准模块, 包含大量泛型代码, 以std.开头.
+在linux上放在`/usr/include/plang/`或`~/.local/include/plang`内.
+在windows上未定.
+在macos上未定.
+如需使用需`cp /path/to/std ./std`, 避免在非std依赖中引入std.
+需要在操作系统平台上运行的标准模块位于`/path/to/std/os`, 即`std.os`.
 
 # 类型系统
 ## 变量修饰
@@ -26,7 +37,7 @@ using vec = vector.vec<i32>;
 在声明变量时, **不可省略**其类型修饰.
 例如, 声明一个类型为长整形的变量:
 ```plang
-var a = 1ll;
+var a = 0ll;
 ```
 或者:
 ```plang
@@ -34,58 +45,13 @@ var: i64 a;
 ```
 类型系统可根据后面的初始值进行类型推导, 整数默认为`int`, 字符默认为`char`, 字符串默认为`string`.
 **将亡值**不可作为类型修饰, 只出现在非平凡类型的`移动构造/赋值函数`中, 被移动的变量将不会调用`析构函数`.
-对于一个`val`修饰的变量, 可称为`常量`, 需在定义处构造, 不可修改, 否则调用abort.
-
-### 移动语义
-采用Rust风格的显式移动, 使用`move`关键字转移所有权:
-```plang
-var a = 1;
-var b = move a;   // a 的所有权移交给 b, 之后 a 不可再使用
-```
-- 移动后原变量(`a`)失效, 再访问触发编译错误.
-- 移动应用于堆内存/非平凡类型时, 被移动的变量不会调用析构函数.
+对于一个`val`修饰的变量, 可称为`常量`, 需在定义处构造, 不可修改, 否则终止程序.
 
 ### 变量命名规范
 变量/常量名由字母/数字/下划线组成, 不能以数字开头, 不可与保留字重名:
 ```plang
 var: int myValue = 1;
 val: string userName = "plang";
-```
-
-#### 保留字
-以下单词被语言保留, 不可用作标识符(变量名/函数名/类型名等):
-- `package` `import`: 包声明与引用.
-- `var` `val` `moved`: 变量修饰.
-- `func` `impl` `return`: 函数定义/实现/返回.
-- `using` `struct` `abstract`: 类型定义.
-- `pub` `prt` `pri`: 访问权限.
-- `this` `thisType`: 当前实例与自身类型.
-- `type`: 模板类型参数.
-- `as`: 强制类型转换.
-- `if` `else` `while` `for`: 流程控制.
-- `int` `char` `string` 等内置类型名: 见`类型系统`.
-
-
-### 类型转换
-类型转换分为自动转换与强制转换.
-自动转换发生在声明/赋值时显式声明了目标类型, 编译器按目标类型自动转换:
-```plang
-var: int a = b;
-```
-强制转换使用`as`关键字, 显式转换:
-```plang
-var: int a = int as b;
-```
-无类型标注且类型不符时编译报错, 不会自动推导错位类型.
-取变量地址以转换为指针, 使用`&`操作符:
-```plang
-var: T a;
-var -> var: T p = &a;
-```
-数组可转换为指向其首元素的指针:
-```plang
-var: T[1] a;
-var -> var: T p = a;
 ```
 
 ### 变量初始化
@@ -103,7 +69,7 @@ var: t point = {1, 2};   // 按成员顺序初始化
 ```
 `val`常量必须在定义处初始化, `var`可不初始化(默认值为0).
 
-## 平凡类型
+## 内置类型
 包含以下整数类型: 
 - `i32`: 32位有符号整数.
 - `int`: 32位有符号整数, `i32`别名.
@@ -120,13 +86,15 @@ var: t point = {1, 2};   // 按成员顺序初始化
 - `wchar`: UTF-32编码字符.
 + `string`: ASCII只读字符串.
 + `wstring`: UTF-32只读字符串.
+C-style字符串，以\0结尾.
 以及以下浮点类型:
 - `f32`: 32位单精度浮点数.
 - `f64`: 64位双精度浮点数.
 整数默认字面量类型为`int`, 浮点字面量默认类型为`f64`.
 
+## 平凡类型
 平凡类型即编译器自动生成`析构`与`拷贝/自动的构造/赋值`函数的类型.
-一般情况下, 对于以上类型, 其构造函数位赋值为0, 析构为空.
+一般情况下, 对于内置类型, 其构造函数位赋值为0(.0)或'\0', 析构为空.
 当然也可以通过调用其构造函数的方式构造其变量, 见下文`变量与常量`.
 
 ## 数组, 指针与引用
@@ -151,10 +119,15 @@ val: T a{0};
 var -> val p;
 var -> var p; // 编译报错
 ```
+对于指针的取引用, 可使用`&a`:
+```plang
+var: T a;
+var -> var: T p = &a;
+```
 对于指针的解引用, 可使用`*p`:
 ```plang
 var: T a;
-var -> var p;
+var -> var p = &a;
 *p = 1;
 ```
 或者使用`.member`访问/调用其成员.
@@ -180,8 +153,8 @@ b = 2; // c = 2;
 ```plang
 using t = struct {
     pub val: T a;
-    pub func .converter();
-    pub func .construction() -> int;
+    pub func .conv();
+    pub func .init();
     pub func getData() -> T;
 };
 ```
@@ -213,30 +186,31 @@ using Circle = struct : pub Shape {
 ### 模板
 模板是一种编译期能力, 模板参数必须为编译期可得值的数据:
 ```plang
-func foo<a: int>() {
+func foo[a: int]() {
     return a * 2;
 }
 ```
+为避免产生歧义, 我们使用`[]`作为模板符号.
 或者是将`type`作为模板类型:
 ```
-func foo<T: type>(val: T a, val: T b) {
+func foo[T: type](val: T a, val: T b) {
     return a + b;
 }
 ```
 如果函数未声明将自动生成模板函数:
 ```
-func foo1<T: type>(val: T a) -> T {
+func foo1[T: type](val: T a) : T {
     return a;
 }
 
-func foo2(val a) -> typeof(a) {
+func foo2[val a] : typeof(a) {
     return a;
 }
 ```
 `typeof`见下文.
 模板可同样应用于结构体:
 ```
-using t = struct<T: type> {
+using t = struct[T: type] {
     val: T a;
 };
 ```
@@ -245,23 +219,43 @@ using t = struct<T: type> {
 与`平凡类型`相反, 可使用一下方法定义几个函数:
 ```plang
 using t = struct {
-    pub func .construction() {} // 构造函数
-    pub func .destroy() {} // 析构函数
-    pub func .construction(val: thisType d) {} // 拷贝构造函数
-    pub func .copy(val: thisType d) {} // 拷贝赋值函数
-    pub func .construction(moved: thisType d) {} // 移动构造函数
-    pub func .copy(moved: thisType d) {} // 移动赋值函数
+    pub func .init() {}                     // 构造函数
+    pub func .destroy() {}                  // 析构函数
+    pub func .init(val: thisType d) {}      // 拷贝构造函数
+    pub func .assm(val: thisType d) {}      // 拷贝赋值函数
+    pub func .init(moved: thisType d) {}    // 移动构造函数
+    pub func .assm(moved: thisType d) {}    // 移动赋值函数
 };
 ```
+对于默认的拷贝, 将拷贝其数值.
+对于默认的移动, 将移动其数值.
 其中`thisType`为`pri`, 用于表示这个类型, 也可使用上面的t.
 为了区分显示调用和自动调用的函数, 这些函数应该在开头加上`.`.
+
+## 类型转换
+类型转换分为自动转换与强制转换.
+自动转换发生在声明/赋值时显式声明了目标类型, 编译器按目标类型自动转换:
+```plang
+var: int a = b;
+```
+强制转换使用`as`关键字, 显式转换:
+```plang
+var: int a = b as int;
+```
+会调用其类型构造函数.
+无类型标注且类型不符时编译报错, 不会自动推导错位类型.
+也可以用于强制移除val:
+```plang
+val a = 0;
+var -> var: int p = &(a as var: int)
+```
 
 ## 继承
 支持多继承, 一个结构体可同时继承多个父结构体.
 继承默认`pri`(私有继承), 仅当显式书写`pub`时为公开继承:
 ```plang
-using A = struct { pub func run() -> int; };
-using B = struct { pub func stop() -> int; };
+using A = struct { pub func run() : int; };
+using B = struct { pub func stop() : int; };
 using S = struct : pub A, B { }; // A 公开继承, B 私有继承
 ```
 禁止菱形继承, 一个类只能作为直接基类出现一次, 若A和B均继承自C, 则S同时继承A和B是非法的.
@@ -274,10 +268,10 @@ using S = struct : pub A, B { }; // A 公开继承, B 私有继承
 接口(`abstract`)走动态分派, 父类只声明函数而无实现, 子类必须实现, 运行时通过函数指针表分派:
 ```plang
 using Shape = abstract {
-    pub func area() -> f64; // 仅声明, 无实现
+    pub func area() : f64; // 仅声明, 无实现
 };
 using Circle = struct : pub Shape {
-    pub func area() -> f64 {
+    pub func area() : f64 {
         return 3.14 * this.r * this.r;
     }
 };
@@ -297,19 +291,19 @@ using Circle = struct : pub Shape {
 ## 函数的定义
 以`func`关键字定义
 ```plang
-func foo() -> T {
+func foo() : T {
 }
 ```
 其中`T`为返回类型. 无返回省略.
 函数参数使用`val`/`var`修饰, 对于`移动构造/赋值函数`可用`moved`, 格式与变量声明一致, 多个参数以逗号分隔:
 ```plang
-func foo(val: int a, var: string b) -> int {
+func foo(val: int a, var: string b) : int {
     return a;
 }
 ```
 当然可以使用无实现, 在同一包内用`impl`实现:
 ```
-func foo() -> int;
+func foo() : int;
 impl foo {
     return 1;
 };
@@ -318,7 +312,7 @@ impl foo {
 ## 程序入口
 程序通常以`main`函数为入口:
 ```plang
-func main() -> int {
+func main() : int {
     return 0;
 }
 ```
