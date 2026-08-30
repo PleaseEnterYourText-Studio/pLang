@@ -2,7 +2,9 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
 #include "../include/Sema.h"
+#include "../include/TypeSystem.h"
 
 void Sema::error(int line, int column, const std::string& message)
 {
@@ -18,11 +20,85 @@ bool Sema::analyze(std::unique_ptr<ProgramNode>& program)
 {
     errors.clear();
     warnings.clear();
+    arrayElementTypes.clear();
+    pointerElementTypes.clear();
+    structRegistry.clear();
+    genericTemplates.clear();
+    currentProgram = program.get();
     visitProgram(program.get());
     return errors.empty();
 }
 
 // 顶层
+
+// 参数类型的详细签名（指针带指向类型，避免 var -> var: int 与 var -> var: char 混淆）
+std::string Sema::functionSignature(FunctionDeclNode* fn)
+{
+    std::string sig;
+    for (auto& p : fn->params)
+    {
+        if (!sig.empty()) sig += "$";
+        sig += p->type ? typeNodeToName(p->type.get()) : "?";
+    }
+    return sig;
+}
+
+// 预扫描函数重载：同名多定义时把 decl 名字改写为 mangled 名（name$paramtypes）
+void Sema::resolveOverloads(std::vector<std::unique_ptr<ASTNode>>& decls)
+{
+    overloadCandidates.clear();
+    std::unordered_map<std::string, std::map<std::string, int>> nameSigs;
+    for (auto& decl : decls)
+    {
+        if (decl->type != ASTNodeType::FUNCTION_DECL) continue;
+        auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+        if (!fn->typeParams.empty() || fn->isExtern) continue;  // 泛型/FFI 不参与重载
+        nameSigs[fn->name][functionSignature(fn)]++;
+    }
+    for (auto& decl : decls)
+    {
+        if (decl->type != ASTNodeType::FUNCTION_DECL) continue;
+        auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get());
+        if (!fn->typeParams.empty() || fn->isExtern) continue;
+        if (nameSigs[fn->name].size() > 1)
+        {
+            fn->name = fn->name + "$" + functionSignature(fn);
+        }
+        overloadCandidates[fn->name.substr(0, fn->name.find('$'))].push_back(fn);
+    }
+}
+
+// 调用点重载解析：按实参类型挑选最匹配的定义，返回其（mangled）名字
+FunctionDeclNode* Sema::resolveOverload(const std::string& rawName,
+                                        const std::vector<std::string>& argTypes)
+{
+    auto it = overloadCandidates.find(rawName);
+    if (it == overloadCandidates.end()) return nullptr;
+    // 候选记录名字去掉 mangled 后缀，用于打印
+    FunctionDeclNode* exact = nullptr;
+    FunctionDeclNode* widening = nullptr;
+    for (auto* fn : it->second)
+    {
+        bool allMatch = true;
+        bool allExact = true;
+        for (size_t i = 0; i < fn->params.size(); ++i)
+        {
+            std::string want = fn->params[i]->type ? typeNodeToName(fn->params[i]->type.get()) : "";
+            if (i >= argTypes.size()) { allMatch = false; break; }
+            if (argTypes[i].empty()) continue;
+            if (argTypes[i] == want) continue;
+            allExact = false;
+            if (!isCompatible(argTypes[i], want)) { allMatch = false; break; }
+        }
+        if (fn->params.size() != argTypes.size()) allMatch = false;
+        if (allMatch)
+        {
+            if (allExact) return fn;
+            if (!widening) widening = fn;
+        }
+    }
+    return widening ? widening : nullptr;
+}
 
 void Sema::visitProgram(ProgramNode* node)
 {
@@ -31,12 +107,33 @@ void Sema::visitProgram(ProgramNode* node)
         error(node->line, node->column, "missing package declaration");
     }
 
+    // 收集导入的模块（如 import std.thread;）
+    importedModules.clear();
+    for (auto& imp : node->imports)
+    {
+        if (imp->type == ASTNodeType::IMPORT_STMT)
+        {
+            auto* importNode = dynamic_cast<ImportStmtNode*>(imp.get());
+            importedModules.insert(importNode->path);
+        }
+    }
+
     // 第一阶段：收集所有顶层声明（函数/结构体），允许前向引用
+
+    // 0) 函数重载预扫描：同名的多个定义按参数类型区分，改名为 mangled 名
+    resolveOverloads(node->decls);
+
     for (auto& decl : node->decls)
     {
         if (decl->type == ASTNodeType::FUNCTION_DECL)
         {
             auto* funcNode = dynamic_cast<FunctionDeclNode*>(decl.get());
+            // 泛型函数：登记模板，不注册普通符号（调用时实例化）
+            if (!funcNode->typeParams.empty())
+            {
+                genericFuncTemplates[funcNode->name] = funcNode;
+                continue;
+            }
             auto sym = std::make_shared<Symbol>(funcNode->name, SymbolKind::FUNCTION,
                                                 SymbolMutability::VAL, "fn",
                                                 funcNode->line, funcNode->column);
@@ -44,10 +141,32 @@ void Sema::visitProgram(ProgramNode* node)
             for (auto& p : funcNode->params)
             {
                 sym->paramTypes.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+                sym->paramNames.push_back(p->name);
             }
+            sym->packageName = funcNode->packageName;
+            sym->isPub = funcNode->isPub;
+            sym->isExtern = funcNode->isExtern;
+            sym->isVariadic = funcNode->isVariadic;
             if (!symbols.declare(funcNode->name, sym))
             {
                 error(funcNode->line, funcNode->column, "duplicate function '" + funcNode->name + "'");
+            }
+            // 包限定别名注册：<别名>.<函数名>（别名为包路径最后一段，如 thread.join）
+            if (!funcNode->packageName.empty())
+            {
+                // 包别名：完整地址（含 /）取最后一段 repo；点分名 foo.bar 取 bar
+                const std::string& pkg = funcNode->packageName;
+                size_t lastSlash = pkg.rfind('/');
+                size_t lastDot = pkg.rfind('.');
+                std::string alias;
+                if (lastSlash != std::string::npos)
+                    alias = pkg.substr(lastSlash + 1);
+                else
+                    alias = (lastDot == std::string::npos) ? pkg : pkg.substr(lastDot + 1);
+                if (!alias.empty() && alias != funcNode->name)
+                {
+                    symbols.declare(alias + "." + funcNode->name, sym);
+                }
             }
         }
         else if (decl->type == ASTNodeType::STRUCT_DECL)
@@ -59,6 +178,36 @@ void Sema::visitProgram(ProgramNode* node)
             if (!symbols.declare(structNode->name, sym))
             {
                 error(structNode->line, structNode->column, "duplicate type '" + structNode->name + "'");
+            }
+            // 登记结构体字段（成员访问 s.x 用）
+            StructInfo info;
+            for (auto& m : structNode->members)
+            {
+                if (m->type == ASTNodeType::VARIABLE_DECL)
+                {
+                    auto* field = dynamic_cast<VariableDeclNode*>(m.get());
+                    if (field->type)
+                    {
+                        info.fields.emplace_back(field->name, typeNodeToName(field->type.get()));
+                        // 数组成员元素类型（s.arr[i] 用）
+                        if (field->type->baseType == ASTNodeType::TYPE_ARRAY && field->type->inner)
+                        {
+                            info.fieldElementTypes[field->name] = typeNodeToName(field->type->inner.get());
+                        }
+                        if (field->type->baseType == ASTNodeType::TYPE_POINTER && field->type->inner)
+                        {
+                            info.fieldPointerTypes[field->name] = typeNodeToName(field->type->inner.get());
+                        }
+                    }
+                }
+            }
+            if (!structNode->typeParams.empty())
+            {
+                genericTemplates[structNode->name] = structNode; // 泛型模板（不注册具体类型）
+            }
+            else
+            {
+                structRegistry[structNode->name] = std::move(info);
             }
         }
         else if (decl->type == ASTNodeType::USING_DECL)
@@ -75,15 +224,88 @@ void Sema::visitProgram(ProgramNode* node)
                 {
                     error(structNode->line, structNode->column, "duplicate type '" + structNode->name + "'");
                 }
+                // 登记结构体字段
+                StructInfo info;
+                for (auto& m : structNode->members)
+                {
+                    if (m->type == ASTNodeType::VARIABLE_DECL)
+                    {
+                        auto* field = dynamic_cast<VariableDeclNode*>(m.get());
+                        if (field->type)
+                        {
+                            info.fields.emplace_back(field->name, typeNodeToName(field->type.get()));
+                            // 数组成员元素类型（s.arr[i] 用）
+                            if (field->type->baseType == ASTNodeType::TYPE_ARRAY && field->type->inner)
+                            {
+                                info.fieldElementTypes[field->name] = typeNodeToName(field->type->inner.get());
+                            }
+                            if (field->type->baseType == ASTNodeType::TYPE_POINTER && field->type->inner)
+                            {
+                                info.fieldPointerTypes[field->name] = typeNodeToName(field->type->inner.get());
+                            }
+                        }
+                    }
+                }
+                // 登记结构体方法签名（obj.method() 解析用）
+                for (auto& m : structNode->members)
+                {
+                    if (m->type == ASTNodeType::FUNCTION_DECL)
+                    {
+                        auto* fn = dynamic_cast<FunctionDeclNode*>(m.get());
+                        std::vector<std::string> pt;
+                        for (auto& p : fn->params)
+                            pt.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+                        info.methods[fn->name] = { fn->returnType ? typeNodeToName(fn->returnType.get()) : "",
+                                                   std::move(pt) };
+                        if (fn->name == ".construction") info.hasConstruction = true;
+                        if (fn->name == ".destroy") info.hasDestruction = true;
+                    }
+                }
+                if (!structNode->typeParams.empty())
+                {
+                    genericTemplates[structNode->name] = structNode; // 泛型模板
+                }
+                else
+                {
+                    structRegistry[structNode->name] = std::move(info);
+                }
+            }
+        }
+        else if (decl->type == ASTNodeType::EXTERN_VAR_DECL)
+        {
+            // extern 全局数据：extern var stdin : ptr;
+            auto* ev = dynamic_cast<ExternVarDeclNode*>(decl.get());
+            auto sym = std::make_shared<Symbol>(ev->name, SymbolKind::VARIABLE,
+                                                ev->isVar ? SymbolMutability::VAR : SymbolMutability::VAL,
+                                                typeNodeToName(ev->type.get()),
+                                                ev->line, ev->column);
+            if (!symbols.declare(ev->name, sym))
+            {
+                error(ev->line, ev->column, "duplicate extern variable '" + ev->name + "'");
             }
         }
     }
 
-    // 第二阶段：检查函数体
+    // 第二阶段：检查函数体（index 循环：泛型实例化会向 decls 追加声明）
+    // main 优先分析：闭包实参→形参的返回类型在 main 内传播，先于被调函数体分析
     symbols.pushScope();
-    for (auto& decl : node->decls)
+    bool mainSeen = false;
+    for (size_t i = 0; i < node->decls.size(); ++i)
     {
-        visitDecl(decl.get());
+        if (node->decls[i]->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(node->decls[i].get());
+            if (fn->name == "main") { mainSeen = true; visitDecl(node->decls[i].get()); }
+        }
+    }
+    for (size_t i = 0; i < node->decls.size(); ++i)
+    {
+        if (mainSeen && node->decls[i]->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(node->decls[i].get());
+            if (fn->name == "main") continue;
+        }
+        visitDecl(node->decls[i].get());
     }
     symbols.popScope();
 }
@@ -93,8 +315,11 @@ void Sema::visitDecl(ASTNode* node)
     switch (node->type)
     {
         case ASTNodeType::FUNCTION_DECL:
-            visitFunctionDecl(dynamic_cast<FunctionDeclNode*>(node));
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(node);
+            if (fn->typeParams.empty()) visitFunctionDecl(fn);  // 泛型函数模板：调用时实例化后检查
             break;
+        }
         case ASTNodeType::STRUCT_DECL:
             visitStructDecl(dynamic_cast<StructDeclNode*>(node));
             break;
@@ -107,9 +332,14 @@ void Sema::visitDecl(ASTNode* node)
             }
             break;
         }
+        case ASTNodeType::ENUM_DECL:
+            visitEnumDecl(dynamic_cast<EnumDeclNode*>(node));
+            break;
         case ASTNodeType::IMPL_DECL:
             visitImplDecl(dynamic_cast<ImplDeclNode*>(node));
             break;
+        case ASTNodeType::EXTERN_VAR_DECL:
+            break; // 已在第一阶段注册
         default:
             break;
     }
@@ -122,12 +352,33 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
     symbols.pushScope();
     currentReturnType = node->returnType ? typeNodeToName(node->returnType.get()) : "";
     currentFunctionName = node->name;
+    currentPackage = node->packageName;
+    functionLabels.clear();
+    duplicateLabels.clear();
+    currentLocals.clear();
+    if (!currentStruct.empty())
+    {
+        // 方法：注册 this（指向当前结构体实例）
+        auto thisSym = std::make_shared<Symbol>("this", SymbolKind::PARAMETER,
+                                                SymbolMutability::VAL, currentStruct,
+                                                node->line, node->column);
+        symbols.declare("this", thisSym);
+    }
 
     // 参数
     for (auto& param : node->params)
     {
+        if (param->type && param->type->baseType == ASTNodeType::TYPE_PRIMITIVE)
+        {
+            tryResolveGenericType(param->type->name);
+        }
         if (param->type)
         {
+            // 记录指针参数指向类型（buf[i] 用）
+            if (param->type->baseType == ASTNodeType::TYPE_POINTER && param->type->inner)
+            {
+                pointerElementTypes[param->name] = typeNodeToName(param->type->inner.get());
+            }
             auto sym = std::make_shared<Symbol>(param->name, SymbolKind::PARAMETER,
                                                 param->isVar ? SymbolMutability::VAR : SymbolMutability::VAL,
                                                 typeNodeToName(param->type.get()),
@@ -142,15 +393,26 @@ void Sema::visitFunctionDecl(FunctionDeclNode* node)
             error(param->line, param->column, "parameter '" + param->name + "' is missing a type");
         }
     }
+    // lambda 生成的函数：捕获变量作为 env 字段，登记为参数符号（body 内按名字解析）
+    for (auto& cap : node->captures)
+    {
+        auto sym = std::make_shared<Symbol>(cap.first, SymbolKind::PARAMETER,
+                                            SymbolMutability::VAL, cap.second,
+                                            node->line, node->column);
+        symbols.declare(cap.first, sym);
+    }
 
     if (node->body)
     {
+        // 预扫描 label（支持前向 goto）
+        collectLabels(node->body.get());
         visitBlock(node->body.get());
     }
 
     symbols.popScope();
     currentReturnType.clear();
     currentFunctionName.clear();
+    currentPackage.clear();
 }
 
 // 结构体
@@ -173,14 +435,22 @@ void Sema::visitStructDecl(StructDeclNode* node)
         auto sym = symbols.lookup(base);
         if (!sym)
         {
-            error(node->line, node->column, "unknown base type '" + base + "'");
-        }
+            error(node->line, node->column, "unknown base type '" + base + "'");        }
     }
 
     // 检查成员（仅做类型引用检查，不深入）
     symbols.pushScope();
     for (auto& member : node->members)
     {
+        if (member->type == ASTNodeType::FUNCTION_DECL)
+        {
+            // 方法体：以当前结构体为 this 作用域检查
+            std::string saved = currentStruct;
+            currentStruct = node->name;
+            visitFunctionDecl(dynamic_cast<FunctionDeclNode*>(member.get()));
+            currentStruct = saved;
+            continue;
+        }
         if (member->type == ASTNodeType::VARIABLE_DECL)
         {
             auto* varNode = dynamic_cast<VariableDeclNode*>(member.get());
@@ -193,7 +463,10 @@ void Sema::visitStructDecl(StructDeclNode* node)
                 }
                 else if (varNode->type->baseType == ASTNodeType::TYPE_PRIMITIVE && !typeName.empty())
                 {
-                    if (!isBuiltinType(typeName))
+                    // 泛型参数（T）跳过
+                    bool isTypeParam = false;
+                    for (auto& tp : node->typeParams) if (tp == typeName) isTypeParam = true;
+                    if (!isTypeParam && !isBuiltinType(typeName))
                     {
                     auto typeSym = symbols.lookup(typeName);
                     if (!typeSym || typeSym->kind != SymbolKind::STRUCT)
@@ -208,6 +481,31 @@ void Sema::visitStructDecl(StructDeclNode* node)
     symbols.popScope();
 }
 
+// enum：注册类型名（按 int 处理）与变体常量
+void Sema::visitEnumDecl(EnumDeclNode* node)
+{
+    enumTypes.insert(node->name);
+    long long next = 0;
+    for (auto& v : node->variants)
+    {
+        long long value = v.hasValue ? v.value : next;
+        next = value + 1;
+        auto sym = std::make_shared<Symbol>(v.name, SymbolKind::VARIABLE, SymbolMutability::VAL,
+                                            "int", node->line, node->column);
+        sym->isConst = true;
+        sym->constValue = value;
+        if (!symbols.declare(v.name, sym))
+        {
+            error(node->line, node->column, "duplicate enum variant '" + v.name + "'");
+        }
+        auto qsym = std::make_shared<Symbol>(node->name + "." + v.name, SymbolKind::VARIABLE,
+                                             SymbolMutability::VAL, "int", node->line, node->column);
+        qsym->isConst = true;
+        qsym->constValue = value;
+        symbols.declare(node->name + "." + v.name, qsym);
+    }
+}
+
 void Sema::visitImplDecl(ImplDeclNode* node)
 {
     // 检查 impl 目标是否存在
@@ -216,6 +514,24 @@ void Sema::visitImplDecl(ImplDeclNode* node)
     if (!sym)
     {
         error(node->line, node->column, "impl target '" + target + "' is not defined");
+        return;
+    }
+    // 方法注册 + 体检查（带 this）
+    for (auto& member : node->members)
+    {
+        if (member->type == ASTNodeType::FUNCTION_DECL)
+        {
+            auto* fn = dynamic_cast<FunctionDeclNode*>(member.get());
+            std::vector<std::string> pt;
+            for (auto& p : fn->params)
+                pt.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+            structRegistry[target].methods[fn->name] =
+                { fn->returnType ? typeNodeToName(fn->returnType.get()) : "", std::move(pt) };
+            std::string saved = currentStruct;
+            currentStruct = target;
+            visitFunctionDecl(fn);
+            currentStruct = saved;
+        }
     }
 }
 
@@ -241,6 +557,21 @@ void Sema::visitStmt(ASTNode* node)
         case ASTNodeType::FOR_STMT:
             visitFor(dynamic_cast<ForStmtNode*>(node));
             break;
+        case ASTNodeType::GOTO_STMT:
+            visitGoto(dynamic_cast<GotoStmtNode*>(node));
+            break;
+        case ASTNodeType::LABEL_STMT:
+            visitLabel(dynamic_cast<LabelStmtNode*>(node));
+            break;
+        case ASTNodeType::BREAK_STMT:
+            visitBreak(dynamic_cast<BreakStmtNode*>(node));
+            break;
+        case ASTNodeType::CONTINUE_STMT:
+            visitContinue(dynamic_cast<ContinueStmtNode*>(node));
+            break;
+        case ASTNodeType::SWITCH_STMT:
+            visitSwitch(dynamic_cast<SwitchStmtNode*>(node));
+            break;
         case ASTNodeType::RETURN_STMT:
             visitReturn(dynamic_cast<ReturnStmtNode*>(node));
             break;
@@ -255,6 +586,436 @@ void Sema::visitStmt(ASTNode* node)
     }
 }
 
+// 泛型实例化
+
+std::unique_ptr<TypeNode> Sema::substituteType(TypeNode* t,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    if (!t) return nullptr;
+    if (t->baseType == ASTNodeType::TYPE_PRIMITIVE)
+    {
+        for (size_t i = 0; i < params.size(); ++i)
+        {
+            if (t->name == params[i])
+            {
+                return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, args[i],
+                                                  t->line, t->column);
+            }
+        }
+        // 嵌套泛型 Box<T> → Box<int>：实参串内做参数名替换
+        if (t->name.find('<') != std::string::npos)
+        {
+            std::string replaced = t->name;
+            for (size_t i = 0; i < params.size(); ++i)
+            {
+                size_t at = 0;
+                while ((at = replaced.find(params[i], at)) != std::string::npos)
+                {
+                    replaced.replace(at, params[i].size(), args[i]);
+                    at += args[i].size();   // 跳过刚替换的内容，恒等替换也能终止
+                }
+            }
+            return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, replaced, t->line, t->column);
+        }
+        return std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, t->name, t->line, t->column);
+    }
+    if (t->baseType == ASTNodeType::TYPE_POINTER || t->baseType == ASTNodeType::TYPE_ARRAY)
+    {
+        auto inner = substituteType(t->inner.get(), params, args);
+        return std::make_unique<TypeNode>(t->baseType, "", t->line, t->column,
+                                          t->arraySize, std::move(inner), t->isConst);
+    }
+    return std::make_unique<TypeNode>(t->baseType, t->name, t->line, t->column,
+                                      t->arraySize, nullptr, t->isConst);
+}
+
+// 深拷贝语句块（泛型函数实例化：克隆函数体并替换类型参数）
+std::unique_ptr<BlockStmtNode> Sema::cloneBlock(BlockStmtNode* b,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    auto clone = std::make_unique<BlockStmtNode>(b ? b->line : 0, b ? b->column : 0);
+    if (!b) return clone;   // extern 声明无函数体
+    for (auto& s : b->statements)
+    {
+        clone->statements.push_back(cloneStmt(s.get(), params, args));
+    }
+    return clone;
+}
+
+std::unique_ptr<ASTNode> Sema::cloneStmt(ASTNode* n,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    if (!n) return nullptr;
+    switch (n->type)
+    {
+        case ASTNodeType::BLOCK_STMT:
+            return cloneBlock(dynamic_cast<BlockStmtNode*>(n), params, args);
+        case ASTNodeType::VARIABLE_DECL:
+        {
+            auto* v = dynamic_cast<VariableDeclNode*>(n);
+            auto t = v->type ? substituteType(v->type.get(), params, args) : nullptr;
+            std::unique_ptr<ASTNode> init;
+            if (v->initializer)
+            {
+                // 初始化列表 {1,2,3} 是 BLOCK_STMT，走 cloneBlock；其余走 cloneExpr
+                init = (v->initializer->type == ASTNodeType::BLOCK_STMT)
+                    ? cloneBlock(static_cast<BlockStmtNode*>(v->initializer.get()), params, args)
+                    : cloneExpr(v->initializer.get(), params, args);
+            }
+            return std::make_unique<VariableDeclNode>(v->isVar, v->isMoved, v->name, std::move(t),
+                                                      std::move(init), v->line, v->column,
+                                                      v->bitWidth, v->isVolatile);
+        }
+        case ASTNodeType::IF_STMT:
+        {
+            auto* s = dynamic_cast<IfStmtNode*>(n);
+            auto cond = s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr;
+            auto thenB = s->thenBranch ? cloneStmt(s->thenBranch.get(), params, args) : nullptr;
+            auto elseB = s->elseBranch ? cloneStmt(s->elseBranch.get(), params, args) : nullptr;
+            return std::make_unique<IfStmtNode>(std::move(cond), std::move(thenB), std::move(elseB),
+                                                s->line, s->column);
+        }
+        case ASTNodeType::WHILE_STMT:
+        {
+            auto* s = dynamic_cast<WhileStmtNode*>(n);
+            auto cond = s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr;
+            auto body = s->body ? cloneStmt(s->body.get(), params, args) : nullptr;
+            return std::make_unique<WhileStmtNode>(std::move(cond), std::move(body), s->line, s->column);
+        }
+        case ASTNodeType::FOR_STMT:
+        {
+            auto* s = dynamic_cast<ForStmtNode*>(n);
+            auto init = s->init ? cloneStmt(s->init.get(), params, args) : nullptr;
+            auto cond = s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr;
+            auto upd = s->update ? cloneExpr(s->update.get(), params, args) : nullptr;
+            auto body = s->body ? cloneStmt(s->body.get(), params, args) : nullptr;
+            return std::make_unique<ForStmtNode>(std::move(init), std::move(cond), std::move(upd),
+                                                 std::move(body), s->line, s->column);
+        }
+        case ASTNodeType::RETURN_STMT:
+        {
+            auto* s = dynamic_cast<ReturnStmtNode*>(n);
+            auto val = s->value ? cloneExpr(s->value.get(), params, args) : nullptr;
+            return std::make_unique<ReturnStmtNode>(std::move(val), s->line, s->column);
+        }
+        case ASTNodeType::GOTO_STMT:
+        {
+            auto* s = dynamic_cast<GotoStmtNode*>(n);
+            return std::make_unique<GotoStmtNode>(s->label, s->line, s->column);
+        }
+        case ASTNodeType::LABEL_STMT:
+        {
+            auto* s = dynamic_cast<LabelStmtNode*>(n);
+            return std::make_unique<LabelStmtNode>(s->name, s->line, s->column);
+        }
+        case ASTNodeType::BREAK_STMT:
+        {
+            auto* s = dynamic_cast<BreakStmtNode*>(n);
+            return std::make_unique<BreakStmtNode>(s->line, s->column);
+        }
+        case ASTNodeType::CONTINUE_STMT:
+        {
+            auto* s = dynamic_cast<ContinueStmtNode*>(n);
+            return std::make_unique<ContinueStmtNode>(s->line, s->column);
+        }
+        case ASTNodeType::SWITCH_STMT:
+        {
+            auto* s = dynamic_cast<SwitchStmtNode*>(n);
+            auto clone = std::make_unique<SwitchStmtNode>(
+                s->condition ? cloneExpr(s->condition.get(), params, args) : nullptr, s->line, s->column);
+            for (auto& c : s->cases)
+            {
+                SwitchCase cc;
+                cc.value = c.value;
+                cc.isDefault = c.isDefault;
+                cc.body = c.body ? cloneBlock(c.body.get(), params, args) : nullptr;
+                clone->cases.push_back(std::move(cc));
+            }
+            return clone;
+        }
+        case ASTNodeType::EXPRESSION_STMT:
+        {
+            auto* s = dynamic_cast<ExpressionStmtNode*>(n);
+            auto e = s->expr ? cloneExpr(s->expr.get(), params, args) : nullptr;
+            return std::make_unique<ExpressionStmtNode>(std::move(e), s->line, s->column);
+        }
+        case ASTNodeType::ASSIGNMENT_STMT:
+        {
+            auto* s = dynamic_cast<AssignmentNode*>(n);
+            auto tgt = s->target ? cloneExpr(s->target.get(), params, args) : nullptr;
+            auto val = s->value ? cloneExpr(s->value.get(), params, args) : nullptr;
+            return std::make_unique<AssignmentNode>(std::move(tgt), std::move(val), s->op, s->line, s->column);
+        }
+        default:
+            return cloneExpr(n, params, args);
+    }
+}
+
+std::unique_ptr<ASTNode> Sema::cloneExpr(ASTNode* n,
+    const std::vector<std::string>& params, const std::vector<std::string>& args)
+{
+    if (!n) return nullptr;
+    switch (n->type)
+    {
+        case ASTNodeType::LITERAL_INT:
+        {
+            auto* e = dynamic_cast<LiteralIntNode*>(n);
+            return std::make_unique<LiteralIntNode>(e->value, e->line, e->column, e->suffix);
+        }
+        case ASTNodeType::LITERAL_FLOAT:
+        {
+            auto* e = dynamic_cast<LiteralFloatNode*>(n);
+            return std::make_unique<LiteralFloatNode>(e->value, e->line, e->column, e->suffix);
+        }
+        case ASTNodeType::LITERAL_STRING:
+        {
+            auto* e = dynamic_cast<LiteralStringNode*>(n);
+            return std::make_unique<LiteralStringNode>(e->value, e->line, e->column, e->isChar);
+        }
+        case ASTNodeType::LITERAL_BOOL:
+        {
+            auto* e = dynamic_cast<LiteralBoolNode*>(n);
+            return std::make_unique<LiteralBoolNode>(e->value, e->line, e->column);
+        }
+        case ASTNodeType::LITERAL_NULL:
+        {
+            auto* e = dynamic_cast<NullNode*>(n);
+            return std::make_unique<NullNode>(e->line, e->column);
+        }
+        case ASTNodeType::VARIABLE_REF:
+        {
+            auto* e = dynamic_cast<VariableRefNode*>(n);
+            return std::make_unique<VariableRefNode>(e->name, e->line, e->column);
+        }
+        case ASTNodeType::BINARY_OP:
+        {
+            auto* e = dynamic_cast<BinaryOpNode*>(n);
+            return std::make_unique<BinaryOpNode>(e->op, cloneExpr(e->lift.get(), params, args),
+                                                  cloneExpr(e->right.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::UNARY_OP:
+        {
+            if (auto* a = dynamic_cast<AddressOfNode*>(n))
+            {
+                return std::make_unique<AddressOfNode>(cloneExpr(a->operand.get(), params, args),
+                                                       a->line, a->column);
+            }
+            auto* e = dynamic_cast<UnaryOpNode*>(n);
+            return std::make_unique<UnaryOpNode>(e->op, cloneExpr(e->operand.get(), params, args),
+                                                 e->line, e->column);
+        }
+        case ASTNodeType::COMPARISON_OP:
+        {
+            auto* e = dynamic_cast<ComparisonOpNode*>(n);
+            return std::make_unique<ComparisonOpNode>(e->op, cloneExpr(e->lift.get(), params, args),
+                                                      cloneExpr(e->right.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::LOGICAL_OP:
+        {
+            auto* e = dynamic_cast<LogicalOpNode*>(n);
+            return std::make_unique<LogicalOpNode>(e->op, cloneExpr(e->lift.get(), params, args),
+                                                   cloneExpr(e->right.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::FUNCTION_CALL:
+        {
+            auto* e = dynamic_cast<FunctionCallNode*>(n);
+            std::vector<std::unique_ptr<ASTNode>> argsClone;
+            for (auto& a : e->arguments) argsClone.push_back(cloneExpr(a.get(), params, args));
+            std::string callName = e->name;
+            // 泛型调用名中的类型参数也要替换：foo<T> → foo<int>（否则克隆体内残留字面 T）
+            if (callName.find('<') != std::string::npos)
+            {
+                size_t lt = callName.find('<');
+                size_t gt = callName.rfind('>');
+                if (gt != std::string::npos)
+                {
+                    std::string typeArgs = callName.substr(lt + 1, gt - lt - 1);
+                    for (size_t i = 0; i < params.size(); ++i)
+                    {
+                        size_t at = 0;
+                        while ((at = typeArgs.find(params[i], at)) != std::string::npos)
+                        {
+                            typeArgs.replace(at, params[i].size(), args[i]);
+                            at += args[i].size();
+                        }
+                    }
+                    callName = callName.substr(0, lt + 1) + typeArgs + callName.substr(gt);
+                }
+            }
+            return std::make_unique<FunctionCallNode>(callName, std::move(argsClone), e->line, e->column);
+        }
+        case ASTNodeType::INDEX:
+        {
+            auto* e = dynamic_cast<IndexNode*>(n);
+            return std::make_unique<IndexNode>(cloneExpr(e->operand.get(), params, args),
+                                               cloneExpr(e->index.get(), params, args), e->line, e->column);
+        }
+        case ASTNodeType::CAST:
+        {
+            auto* e = dynamic_cast<CastNode*>(n);
+            return std::make_unique<CastNode>(e->targetType, cloneExpr(e->value.get(), params, args),
+                                              e->line, e->column);
+        }
+        case ASTNodeType::SIZEOF_EXPR:
+        {
+            auto* e = dynamic_cast<SizeofExprNode*>(n);
+            auto ty = e->targetType ? substituteType(e->targetType.get(), params, args) : nullptr;
+            return std::make_unique<SizeofExprNode>(std::move(ty), e->line, e->column);
+        }
+        case ASTNodeType::THIS_REF:
+        {
+            auto* e = dynamic_cast<ThisRefNode*>(n);
+            return std::make_unique<ThisRefNode>(e->line, e->column);
+        }
+        case ASTNodeType::TRY_EXPR:
+        {
+            auto* e = dynamic_cast<TryExprNode*>(n);
+            return std::make_unique<TryExprNode>(cloneExpr(e->operand.get(), params, args),
+                                                 e->line, e->column);
+        }
+        default:
+            return nullptr;
+    }
+}
+
+void Sema::instantiateGeneric(const std::string& mangled)
+{
+    if (structRegistry.count(mangled)) return; // 已实例化
+    size_t lt = mangled.find('<');
+    if (lt == std::string::npos) return;
+    std::string base = mangled.substr(0, lt);
+    auto tIt = genericTemplates.find(base);
+    if (tIt == genericTemplates.end()) return;
+    StructDeclNode* tmpl = tIt->second;
+
+    std::string argStr = mangled.substr(lt + 1, mangled.rfind('>') - lt - 1);
+    std::vector<std::string> args;
+    size_t pos = 0;
+    while (pos <= argStr.size())
+    {
+        size_t comma = argStr.find(',', pos);
+        std::string a = (comma == std::string::npos) ? argStr.substr(pos) : argStr.substr(pos, comma - pos);
+        while (!a.empty() && a.front() == ' ') a = a.substr(1);
+        while (!a.empty() && a.back() == ' ') a.pop_back();
+        if (!a.empty()) args.push_back(a);
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    if (args.size() != tmpl->typeParams.size()) return;
+
+    auto clone = std::make_unique<StructDeclNode>(mangled, tmpl->isAbstract, tmpl->line, tmpl->column);
+    clone->isUnion = tmpl->isUnion;
+    clone->alignBytes = tmpl->alignBytes;
+    clone->bases = tmpl->bases;
+    for (auto& m : tmpl->members)
+    {
+        if (m->type == ASTNodeType::VARIABLE_DECL)
+        {
+            auto* f = dynamic_cast<VariableDeclNode*>(m.get());
+            auto nt = f->type ? substituteType(f->type.get(), tmpl->typeParams, args) : nullptr;
+            clone->members.push_back(std::make_unique<VariableDeclNode>(
+                f->isVar, f->isMoved, f->name, std::move(nt), nullptr,
+                f->line, f->column, f->bitWidth, f->isVolatile));
+        }
+    }
+
+    auto sym = std::make_shared<Symbol>(mangled, SymbolKind::STRUCT, SymbolMutability::VAL,
+                                        "type", (int)mangled.size(), 0);
+    symbols.declareGlobal(mangled, sym); // 根作用域，跨函数可见
+    StructInfo info;
+    for (auto& m : clone->members)
+    {
+        if (m->type == ASTNodeType::VARIABLE_DECL)
+        {
+            auto* f = dynamic_cast<VariableDeclNode*>(m.get());
+            if (f->type)
+            {
+                info.fields.emplace_back(f->name, typeNodeToName(f->type.get()));
+                if (f->type->baseType == ASTNodeType::TYPE_ARRAY && f->type->inner)
+                {
+                    info.fieldElementTypes[f->name] = typeNodeToName(f->type->inner.get());
+                }
+                if (f->type->baseType == ASTNodeType::TYPE_POINTER && f->type->inner)
+                {
+                    info.fieldPointerTypes[f->name] = typeNodeToName(f->type->inner.get());
+                }
+            }
+        }
+    }
+    structRegistry[mangled] = std::move(info);
+
+    if (currentProgram) currentProgram->decls.push_back(std::move(clone));
+}
+
+bool Sema::tryResolveGenericType(const std::string& name)
+{
+    if (name.find('<') == std::string::npos) return true;
+    instantiateGeneric(name);
+    return structRegistry.count(name) > 0;
+}
+
+// 泛型函数实例化：克隆声明 + 替换类型参数，注入主程序（mangled 名 "foo<int>"）
+void Sema::instantiateGenericFunc(const std::string& tmplName, const std::string& callName)
+{
+    if (genericFuncInstances.count(callName)) return; // 已实例化
+    size_t lt = callName.find('<');
+    if (lt == std::string::npos) return;
+    auto tIt = genericFuncTemplates.find(tmplName);
+    if (tIt == genericFuncTemplates.end()) return;
+    FunctionDeclNode* tmpl = tIt->second;
+
+    std::string argStr = callName.substr(lt + 1, callName.rfind('>') - lt - 1);
+    std::vector<std::string> args;
+    size_t pos = 0;
+    while (pos <= argStr.size())
+    {
+        size_t comma = argStr.find(',', pos);
+        std::string a = (comma == std::string::npos) ? argStr.substr(pos) : argStr.substr(pos, comma - pos);
+        while (!a.empty() && a.front() == ' ') a = a.substr(1);
+        while (!a.empty() && a.back() == ' ') a.pop_back();
+        if (!a.empty()) args.push_back(a);
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    if (args.size() != tmpl->typeParams.size()) return;
+
+    // 克隆函数：名字用调用名（含包前缀），参数/返回类型替换 T → args
+    auto clone = std::make_unique<FunctionDeclNode>(callName, tmpl->line, tmpl->column);
+    clone->hasBody = tmpl->hasBody;
+    clone->isExtern = tmpl->isExtern;
+    clone->isPub = tmpl->isPub;
+    clone->isVariadic = tmpl->isVariadic;
+    clone->packageName = tmpl->packageName;
+    for (auto& p : tmpl->params)
+    {
+        auto nt = p->type ? substituteType(p->type.get(), tmpl->typeParams, args) : nullptr;
+        clone->params.push_back(std::make_unique<ParameterNode>(
+            p->isVar, p->name, std::move(nt), p->line, p->column));
+    }
+    if (tmpl->returnType)
+    {
+        clone->returnType = substituteType(tmpl->returnType.get(), tmpl->typeParams, args);
+    }
+    // 函数体克隆（需要深拷贝，这里用 AST 深拷贝辅助；先克隆语句块）
+    clone->body = cloneBlock(tmpl->body.get(), tmpl->typeParams, args);
+
+    // 注册实例符号（函数本体名即 mangled）
+    // 注册实例符号：调用名（vector.push<int>）+ 模板本名（push<int>）都指向同一函数
+    auto sym = std::make_shared<Symbol>(callName, SymbolKind::FUNCTION, SymbolMutability::VAL, "fn",
+                                        tmpl->line, tmpl->column);
+    sym->returnType = clone->returnType ? typeNodeToName(clone->returnType.get()) : "";
+    for (auto& p : clone->params)
+    {
+        sym->paramTypes.push_back(p->type ? typeNodeToName(p->type.get()) : "");
+    }
+    sym->packageName = tmpl->packageName;
+    sym->isPub = tmpl->isPub;
+    symbols.declareGlobal(callName, sym); // 根作用域，跨函数可见
+    genericFuncInstances.insert(callName);
+
+    if (currentProgram) currentProgram->decls.push_back(std::move(clone));
+}
+
 void Sema::visitBlock(BlockStmtNode* node)
 {
     symbols.pushScope();
@@ -267,16 +1028,30 @@ void Sema::visitBlock(BlockStmtNode* node)
 
 void Sema::visitVarDecl(VariableDeclNode* node)
 {
+    // lambda 体内的局部变量：计入 lambda 自身变量，避免误判为捕获
+    if (lambdaOwnVars) lambdaOwnVars->insert(node->name);
     std::string declaredType;
     if (node->type)
     {
         declaredType = typeNodeToName(node->type.get());
+
+        // 记录数组元素类型（buf[i] 用）
+        if (node->type->baseType == ASTNodeType::TYPE_ARRAY && node->type->inner)
+        {
+            arrayElementTypes[node->name] = typeNodeToName(node->type->inner.get());
+        }
+        // 记录指针指向类型（buf[i] 用）
+        if (node->type->baseType == ASTNodeType::TYPE_POINTER && node->type->inner)
+        {
+            pointerElementTypes[node->name] = typeNodeToName(node->type->inner.get());
+        }
 
         // 检查用户自定义类型（IDENT）是否已定义
         if (node->type->baseType == ASTNodeType::TYPE_PRIMITIVE && !declaredType.empty())
         {
             if (!isBuiltinType(declaredType))
             {
+                tryResolveGenericType(declaredType); // 泛型实例化（如 Box<int>）
                 auto typeSym = symbols.lookup(declaredType);
                 if (!typeSym || typeSym->kind != SymbolKind::STRUCT)
                 {
@@ -290,6 +1065,13 @@ void Sema::visitVarDecl(VariableDeclNode* node)
     if (node->initializer)
     {
         initType = visitExpr(node->initializer.get());
+        // 闭包变量：记录返回类型供调用点使用（复合键 函数.变量，避免跨函数同名冲突）
+        if (declaredType == "Closure" && node->initializer->type == ASTNodeType::LAMBDA_EXPR)
+        {
+            auto* lam = static_cast<LambdaExprNode*>(node->initializer.get());
+            closureReturnTypes[currentFunctionName + "." + node->name] =
+                lam->returnType ? typeNodeToName(lam->returnType.get()) : "int";
+        }
     }
 
     if (node->isMoved)
@@ -328,6 +1110,10 @@ void Sema::visitVarDecl(VariableDeclNode* node)
     {
         error(node->line, node->column, "duplicate variable '" + node->name + "'");
     }
+    else
+    {
+        currentLocals.insert(node->name); // 借用检查：局部变量
+    }
 }
 
 void Sema::visitIf(IfStmtNode* node)
@@ -342,21 +1128,197 @@ void Sema::visitIf(IfStmtNode* node)
 
 void Sema::visitWhile(WhileStmtNode* node)
 {
+    loopDepth++;
     if (node->condition)
     {
         visitExpr(node->condition.get());
     }
     if (node->body) visitStmt(node->body.get());
+    loopDepth--;
+}
+
+void Sema::visitBreak(BreakStmtNode* node)
+{
+    if (loopDepth <= 0)
+    {
+        error(node->line, node->column, "'break' used outside of a loop");
+    }
+}
+
+void Sema::visitContinue(ContinueStmtNode* node)
+{
+    if (loopDepth <= 0)
+    {
+        error(node->line, node->column, "'continue' used outside of a loop");
+    }
+}
+
+void Sema::collectLabels(ASTNode* node)
+{
+    if (!node) return;
+    if (node->type == ASTNodeType::LABEL_STMT)
+    {
+        functionLabels.insert(dynamic_cast<LabelStmtNode*>(node)->name);
+        return;
+    }
+    if (node->type == ASTNodeType::BLOCK_STMT)
+    {
+        for (auto& st : dynamic_cast<BlockStmtNode*>(node)->statements) collectLabels(st.get());
+    }
+    else if (node->type == ASTNodeType::IF_STMT)
+    {
+        auto* ifn = dynamic_cast<IfStmtNode*>(node);
+        collectLabels(ifn->thenBranch.get());
+        collectLabels(ifn->elseBranch.get());
+    }
+    else if (node->type == ASTNodeType::WHILE_STMT)
+    {
+        collectLabels(dynamic_cast<WhileStmtNode*>(node)->body.get());
+    }
+    else if (node->type == ASTNodeType::FOR_STMT)
+    {
+        auto* fn = dynamic_cast<ForStmtNode*>(node);
+        collectLabels(fn->init.get());
+        collectLabels(fn->body.get());
+    }
+    else if (node->type == ASTNodeType::SWITCH_STMT)
+    {
+        for (auto& c : dynamic_cast<SwitchStmtNode*>(node)->cases) collectLabels(c.body.get());
+    }
+}
+
+void Sema::visitGoto(GotoStmtNode* node)
+{
+    if (functionLabels.find(node->label) == functionLabels.end())
+    {
+        error(node->line, node->column, "undefined label '" + node->label + "'");
+    }
+}
+
+void Sema::visitLabel(LabelStmtNode* node)
+{
+    if (!duplicateLabels.insert(node->name).second)
+    {
+        error(node->line, node->column, "duplicate label '" + node->name + "'");
+    }
+}
+
+void Sema::visitSwitch(SwitchStmtNode* node)
+{
+    std::string condType = visitExpr(node->condition.get());
+    if (!condType.empty() && !isNumericType(condType))
+    {
+        error(node->line, node->column, "switch condition must be numeric, got '" + condType + "'");
+    }
+    std::set<long long> seen;
+    for (auto& c : node->cases)
+    {
+        if (!c.isDefault)
+        {
+            if (!seen.insert(c.value).second)
+            {
+                error(node->line, node->column, "duplicate case value " + std::to_string(c.value));
+            }
+        }
+        if (c.body) visitStmt(c.body.get());
+    }
 }
 
 void Sema::visitFor(ForStmtNode* node)
 {
     symbols.pushScope();
+    loopDepth++;
     if (node->init) visitStmt(node->init.get());
     if (node->condition) visitExpr(node->condition.get());
     if (node->update) visitExpr(node->update.get());
     if (node->body) visitStmt(node->body.get());
+    loopDepth--;
     symbols.popScope();
+}
+
+// lambda 闭包：检测捕获的自由变量，生成具名函数 __lambdaN（捕获变量作前置参数）
+std::string Sema::visitLambda(LambdaExprNode* node)
+{    std::string name = "__lambda" + std::to_string(lambdaCounter++);
+    node->generatedName = name;
+
+    // 在 lambda 作用域分析函数体以检测捕获（currentLambda 供 visitVariableRef 记录）
+    std::set<std::string> ownVars;
+    lambdaOwnVars = &ownVars;
+    symbols.pushScope();
+    for (auto& p : node->params)
+    {
+        ownVars.insert(p->name);
+        if (p->type && p->type->baseType == ASTNodeType::TYPE_PRIMITIVE)
+            tryResolveGenericType(p->type->name);
+        if (p->type)
+        {
+            auto sym = std::make_shared<Symbol>(p->name, SymbolKind::PARAMETER,
+                                                p->isVar ? SymbolMutability::VAR : SymbolMutability::VAL,
+                                                typeNodeToName(p->type.get()), p->line, p->column);
+            symbols.declare(p->name, sym);
+        }
+    }
+    currentLambda = node;
+    std::string savedReturnType = currentReturnType;
+    currentReturnType = node->returnType ? typeNodeToName(node->returnType.get()) : "";
+    if (node->body) visitBlock(node->body.get());
+    currentReturnType = savedReturnType;
+    currentLambda = nullptr;
+    lambdaOwnVars = nullptr;
+    symbols.popScope();
+
+    // 生成 lambda 函数声明：签名 (env: ptr, 声明参数...) -> ret；捕获变量按 env 字段访问
+    auto fn = std::make_unique<FunctionDeclNode>(name, node->line, node->column);
+    fn->packageName = currentPackage;
+    fn->captures = node->captures;
+    auto envParamTy = std::make_unique<TypeNode>(ASTNodeType::TYPE_POINTER, "",
+                                                 node->line, node->column);
+    fn->params.push_back(std::make_unique<ParameterNode>(true, "__env", std::move(envParamTy),
+                                                         node->line, node->column));
+    for (auto& p : node->params)
+    {
+        auto t = p->type ? substituteType(p->type.get(), {}, {}) : nullptr;
+        fn->params.push_back(std::make_unique<ParameterNode>(p->isVar, p->name, std::move(t),
+                                                             p->line, p->column));
+    }
+    fn->returnType = node->returnType ? substituteType(node->returnType.get(), {}, {}) : nullptr;
+    fn->body = std::move(node->body);
+    if (currentProgram) currentProgram->decls.push_back(std::move(fn));
+    return "Closure";
+}
+
+// ? 错误传播：操作数必须是 Result<T,E>，且与当前函数返回类型一致（v1）
+std::string Sema::visitTry(TryExprNode* node)
+{
+    std::string operandType = visitExpr(node->operand.get());
+    if (operandType.rfind("Result<", 0) != 0)
+    {
+        error(node->line, node->column, "'?' requires a Result value, got '" + operandType + "'");
+        return "";
+    }
+    if (currentReturnType.rfind("Result<", 0) != 0)
+    {
+        error(node->line, node->column, "'?' used in a function that does not return a Result");
+        return "";
+    }
+    if (operandType != currentReturnType)
+    {
+        error(node->line, node->column, "'?' operand type '" + operandType +
+              "' does not match function return type '" + currentReturnType + "'");
+        return "";
+    }
+    // 返回 value 类型：从 "Result<T, E>" 提取 T
+    size_t lt = operandType.find('<');
+    size_t comma = operandType.find(',', lt);
+    if (lt == std::string::npos || comma == std::string::npos)
+    {
+        error(node->line, node->column, "malformed Result type '" + operandType + "'");
+        return "";
+    }
+    std::string valueType = operandType.substr(lt + 1, comma - lt - 1);
+    while (!valueType.empty() && valueType.front() == ' ') valueType.erase(0, 1);
+    while (!valueType.empty() && valueType.back() == ' ') valueType.pop_back();
+    return valueType;
 }
 
 void Sema::visitReturn(ReturnStmtNode* node)
@@ -364,12 +1326,27 @@ void Sema::visitReturn(ReturnStmtNode* node)
     if (node->value)
     {
         std::string valueType = visitExpr(node->value.get());
-        if (!currentReturnType.empty())
+        // 结构体/数组字面量返回 {…}：类型由返回类型决定，跳过字面量类型检查
+        bool isInitList = (node->value->type == ASTNodeType::BLOCK_STMT);
+        if (!isInitList && !currentReturnType.empty())
         {
             if (!isCompatible(valueType, currentReturnType))
             {
                 error(node->line, node->column, "cannot return value of type '" + valueType +
                       "' from function returning '" + currentReturnType + "'");
+            }
+        }
+        // 借用检查：返回局部变量地址 → 悬垂指针
+        if (currentReturnType == "pointer" && node->value->type == ASTNodeType::UNARY_OP)
+        {
+            if (auto* addr = dynamic_cast<AddressOfNode*>(node->value.get()))
+            {
+                std::string root = rootVarName(addr->operand.get());
+                if (!root.empty() && currentLocals.count(root))
+                {
+                    error(node->line, node->column, "cannot return reference to local variable '" +
+                          root + "' (dangling pointer)");
+                }
             }
         }
     }
@@ -401,9 +1378,18 @@ std::string Sema::visitExpr(ASTNode* node)
         case ASTNodeType::BINARY_OP: return visitBinary(dynamic_cast<BinaryOpNode*>(node));
         case ASTNodeType::UNARY_OP:
         {
-            // 取地址 &a → pointer
+            // 取地址 &a → pointer；&函数名 → func（函数指针）
             if (auto* addr = dynamic_cast<AddressOfNode*>(node))
             {
+                if (addr->operand->type == ASTNodeType::VARIABLE_REF)
+                {
+                    auto* ref = dynamic_cast<VariableRefNode*>(addr->operand.get());
+                    auto fnSym = symbols.lookup(ref->name);
+                    if (fnSym && fnSym->kind == SymbolKind::FUNCTION)
+                    {
+                        return "func";
+                    }
+                }
                 visitExpr(addr->operand.get());
                 return "pointer";
             }
@@ -416,7 +1402,9 @@ std::string Sema::visitExpr(ASTNode* node)
         case ASTNodeType::LITERAL_FLOAT: return visitLiteralFloat(dynamic_cast<LiteralFloatNode*>(node));
         case ASTNodeType::LITERAL_STRING: return visitLiteralString(dynamic_cast<LiteralStringNode*>(node));
         case ASTNodeType::LITERAL_BOOL: return visitLiteralBool(dynamic_cast<LiteralBoolNode*>(node));
+        case ASTNodeType::LITERAL_NULL: return "pointer";
         case ASTNodeType::VARIABLE_REF: return visitVariableRef(dynamic_cast<VariableRefNode*>(node));
+        case ASTNodeType::INDEX: return visitIndex(dynamic_cast<IndexNode*>(node));
         case ASTNodeType::ASSIGNMENT_STMT: return visitAssignment(dynamic_cast<AssignmentNode*>(node));
         case ASTNodeType::CAST:
         {
@@ -424,8 +1412,64 @@ std::string Sema::visitExpr(ASTNode* node)
             visitExpr(castNode->value.get());
             return castNode->targetType;
         }
+        case ASTNodeType::SIZEOF_EXPR:
+        {
+            auto* sz = dynamic_cast<SizeofExprNode*>(node);
+            if (sz->targetType) visitExpr(nullptr); // 类型校验在 CodeGenerator 处理（大小按 LLVM 类型）
+            return "int";
+        }
+        case ASTNodeType::LAMBDA_EXPR:
+            return visitLambda(dynamic_cast<LambdaExprNode*>(node));
+        case ASTNodeType::TRY_EXPR:
+            return visitTry(dynamic_cast<TryExprNode*>(node));
+        case ASTNodeType::BLOCK_STMT:
+        {
+            // 初始化列表 {a, b, {c}}：逐个访问元素（类型检查 + 包限定调用重命名）
+            auto* block = dynamic_cast<BlockStmtNode*>(node);
+            for (auto& elem : block->statements) visitExpr(elem.get());
+            return "";
+        }
         default: return "";
     }
+}
+
+// 运算符重载：二元运算符 → 方法名（返回空串表示不支持）
+static const char* binaryOpMethodName(BinaryOpType op)
+{    switch (op) {
+        case BinaryOpType::ADD: return "opAdd";
+        case BinaryOpType::SUB: return "opSub";
+        case BinaryOpType::MUL: return "opMul";
+        case BinaryOpType::DIV: return "opDiv";
+        case BinaryOpType::MOD: return "opMod";
+        default: return "";
+    }
+}
+
+static const char* comparisonOpMethodName(ComparisonOpType op)
+{
+    switch (op) {
+        case ComparisonOpType::EQ: return "opEq";
+        case ComparisonOpType::NE: return "opNe";
+        case ComparisonOpType::LT: return "opLt";
+        case ComparisonOpType::LE: return "opLe";
+        case ComparisonOpType::GT: return "opGt";
+        case ComparisonOpType::GE: return "opGe";
+    }
+    return "";
+}
+
+// 左右类型中哪个是定义了 opName 方法的结构体，返回其类型名（无则空串）
+std::string Sema::structWithOperator(const std::string& leftType, const std::string& rightType,
+                                     const std::string& opName) const
+{
+    if (opName.empty()) return "";
+    auto has = [&](const std::string& t) -> bool {
+        auto it = structRegistry.find(t);
+        return it != structRegistry.end() && it->second.methods.count(opName);
+    };
+    if (has(leftType)) return leftType;
+    if (has(rightType)) return rightType;
+    return "";
 }
 
 std::string Sema::visitBinary(BinaryOpNode* node)
@@ -434,6 +1478,20 @@ std::string Sema::visitBinary(BinaryOpNode* node)
     std::string rightType = visitExpr(node->right.get());
     if (!leftType.empty() && !rightType.empty())
     {
+        // 运算符重载：结构体定义 opAdd 等
+        const char* opName = binaryOpMethodName(node->op);
+        std::string target = structWithOperator(leftType, rightType, opName ? opName : "");
+        if (!target.empty())
+        {
+            return structRegistry.at(target).methods.at(opName).first;
+        }
+        // 指针算术：pointer +- int → pointer（按元素大小缩放）
+        bool leftPtr = leftType == "pointer" || leftType == "ptr";
+        bool rightPtr = rightType == "pointer" || rightType == "ptr";
+        if ((leftPtr && isNumericType(rightType)) || (rightPtr && isNumericType(leftType)))
+        {
+            return leftPtr ? leftType : rightType;
+        }
         if (!isNumericType(leftType) || !isNumericType(rightType))
         {
             error(node->line, node->column, "arithmetic on non-numeric types '" + leftType + "' and '" + rightType + "'");
@@ -447,19 +1505,33 @@ std::string Sema::visitUnary(UnaryOpNode* node)
     std::string operandType = visitExpr(node->operand.get());
     if (node->op == UnaryOpType::DEREF)
     {
-        if (operandType != "pointer" && !operandType.empty())
+        if (operandType != "pointer" && operandType != "ptr" && !operandType.empty())
         {
             error(node->line, node->column, "cannot dereference non-pointer type '" + operandType + "'");
         }
-        return "int"; // 简化：解引用返回 int
+        // 类型化解引用：指针变量的指向类型
+        if (node->operand->type == ASTNodeType::VARIABLE_REF)
+        {
+            auto* ref = dynamic_cast<VariableRefNode*>(node->operand.get());
+            auto it = pointerElementTypes.find(ref->name);
+            if (it != pointerElementTypes.end()) return it->second;
+        }
+        return "int"; // 简化：未知元素类型按 int
     }
     return operandType;
 }
 
 std::string Sema::visitComparison(ComparisonOpNode* node)
 {
-    visitExpr(node->lift.get());
-    visitExpr(node->right.get());
+    std::string leftType = visitExpr(node->lift.get());
+    std::string rightType = visitExpr(node->right.get());
+    // 运算符重载：结构体定义 opEq/opLt 等
+    const char* opName = comparisonOpMethodName(node->op);
+    std::string target = structWithOperator(leftType, rightType, opName ? opName : "");
+    if (!target.empty())
+    {
+        return structRegistry.at(target).methods.at(opName).first;
+    }
     return "bool";
 }
 
@@ -480,11 +1552,146 @@ std::string Sema::visitLogical(LogicalOpNode* node)
 
 std::string Sema::visitCall(FunctionCallNode* node)
 {
-    // 成员方法调用 circle.area() —— 拆分根对象与方法名
+    // 泛型函数调用 foo<T>(args) / vector.push<T>(...)：实例化后按 mangled 名继续检查
+    if (node->name.find('<') != std::string::npos)
+    {
+        size_t lt = node->name.find('<');
+        std::string prefix = node->name.substr(0, lt);
+        // 包限定调用（vector.push<int>）：模板名取最后一段
+        size_t dot = prefix.rfind('.');
+        std::string tmplName = (dot == std::string::npos) ? prefix : prefix.substr(dot + 1);
+        if (genericFuncTemplates.count(tmplName))
+        {
+            instantiateGenericFunc(tmplName, node->name);
+            auto gsym = symbols.lookup(node->name);
+            if (gsym && gsym->kind == SymbolKind::FUNCTION)
+            {
+                if (gsym->paramTypes.size() != node->arguments.size())
+                {
+                    error(node->line, node->column, "generic function '" + node->name + "' expects " +
+                          std::to_string(gsym->paramTypes.size()) + " argument(s), got " +
+                          std::to_string(node->arguments.size()));
+                }
+                for (size_t i = 0; i < node->arguments.size() && i < gsym->paramTypes.size(); ++i)
+                {
+                    std::string at = visitExpr(node->arguments[i].get());
+                    if (!at.empty() && !gsym->paramTypes[i].empty() && !isCompatible(at, gsym->paramTypes[i]))
+                    {
+                        error(node->line, node->column, "argument " + std::to_string(i + 1) + " of '" +
+                              node->name + "' expects '" + gsym->paramTypes[i] + "', got '" + at + "'");
+                    }
+                }
+                return gsym->returnType;
+            }
+            error(node->line, node->column, "unknown generic function '" + node->name + "'");
+            for (auto& a : node->arguments) visitExpr(a.get());
+            return "";
+        }
+    }
+
+    // 函数重载解析：同名不同参，按实参类型匹配并改写为 mangled 名
+    if (overloadCandidates.count(node->name))
+    {
+        std::vector<std::string> argTypes;
+        for (auto& a : node->arguments) argTypes.push_back(visitExpr(a.get()));
+        FunctionDeclNode* chosen = resolveOverload(node->name, argTypes);
+        if (!chosen)
+        {
+            error(node->line, node->column, "no matching overload for '" + node->name + "'");
+            for (auto& a : node->arguments) visitExpr(a.get());
+            return "";
+        }
+        node->name = chosen->name;
+    }
+
+    // std.thread 编译器内置调用（仅 spawn / sleep / mutex.create；其余为 std.thread 源码库函数）
+    if (node->name == "thread.spawn" || node->name == "thread.sleep" ||
+        node->name == "thread.mutex.create")
+    {
+        return visitThreadCall(node);
+    }
+
+    // std.atomic 原子内置调用
+    if (node->name.rfind("atomic.", 0) == 0)
+    {
+        return visitAtomicCall(node);
+    }
+
+    // 成员方法调用 circle.area() / 包限定调用 thread.join() —— 拆分根对象与方法名
     size_t dot = node->name.find('.');
     if (dot != std::string::npos)
     {
         std::string objName = node->name.substr(0, dot);
+
+        // 包限定调用：objName 是某个已导入包的别名（如 import std.thread 后的 thread）
+        bool isPackageAlias = false;
+        for (const auto& imp : importedModules)
+        {
+            // 包别名：完整地址（含 /）取最后一段 repo；点分名 foo.bar 取 bar
+            std::string alias;
+            size_t lastSlash = imp.rfind('/');
+            size_t lastDot = imp.rfind('.');
+            if (lastSlash != std::string::npos) alias = imp.substr(lastSlash + 1);
+            else alias = imp.substr(lastDot + 1);
+            if (alias == objName) { isPackageAlias = true; break; }
+        }
+        if (isPackageAlias)
+        {
+            auto pkgSym = symbols.lookup(node->name); // "<别名>.<函数名>" 已在注册阶段登记
+            if (!pkgSym)
+            {
+                error(node->line, node->column,
+                      "unknown function '" + node->name + "' in module '" + objName + "'");
+                return "";
+            }
+            if (pkgSym->kind != SymbolKind::FUNCTION)
+            {
+                error(node->line, node->column, "'" + node->name + "' is not a function");
+                return "";
+            }
+            // 跨包可见性：必须 pub（同包调用豁免）
+            if (!pkgSym->isPub && pkgSym->packageName != currentPackage)
+            {
+                error(node->line, node->column, "function '" + node->name + "' is not public");
+                return "";
+            }
+            // 参数数量检查（变参函数允许至少 N 个）
+            if (!pkgSym->paramTypes.empty() || !node->arguments.empty())
+            {
+                if (pkgSym->isVariadic)
+                {
+                    if (node->arguments.size() < pkgSym->paramTypes.size())
+                    {
+                        error(node->line, node->column, "function '" + node->name + "' expects at least " +
+                              std::to_string(pkgSym->paramTypes.size()) + " argument(s), got " +
+                              std::to_string(node->arguments.size()));
+                    }
+                }
+                else if (pkgSym->paramTypes.size() != node->arguments.size())
+                {
+                    error(node->line, node->column, "function '" + node->name + "' expects " +
+                          std::to_string(pkgSym->paramTypes.size()) + " argument(s), got " +
+                          std::to_string(node->arguments.size()));
+                }
+            }
+            // 参数类型检查
+            for (size_t i = 0; i < node->arguments.size() && i < pkgSym->paramTypes.size(); ++i)
+            {
+                std::string argType = visitExpr(node->arguments[i].get());
+                if (!argType.empty() && !pkgSym->paramTypes[i].empty())
+                {
+                    if (!isCompatible(argType, pkgSym->paramTypes[i]))
+                    {
+                        error(node->line, node->column, "argument " + std::to_string(i + 1) + " of '" +
+                              node->name + "' expects '" + pkgSym->paramTypes[i] + "', got '" + argType + "'");
+                    }
+                }
+            }
+            // 重命名为函数本名（合并单模块代码生成直接按本名查 LLVM 函数）
+            node->name = pkgSym->name;
+            return pkgSym->returnType;
+        }
+
         std::string methodName = node->name.substr(dot + 1);
 
         auto objSym = symbols.lookup(objName);
@@ -493,13 +1700,39 @@ std::string Sema::visitCall(FunctionCallNode* node)
             error(node->line, node->column, "call to method on undefined object '" + objName + "'");
             return "";
         }
-        // 简化：方法返回值类型暂按结构体成员推导，这里返回 "int" 占位
-        // 后续接入结构体成员表后完善
+        // 静态方法调用 obj.method(args)：查结构体方法表
+        auto st = structRegistry.find(objSym->typeName);
+        if (st != structRegistry.end())
+        {
+            auto mIt = st->second.methods.find(methodName);
+            if (mIt != st->second.methods.end())
+            {
+                auto& [retType, paramTypes] = mIt->second;
+                if (node->arguments.size() != paramTypes.size())
+                {
+                    error(node->line, node->column, "method '" + methodName + "' expects " +
+                          std::to_string(paramTypes.size()) + " argument(s), got " +
+                          std::to_string(node->arguments.size()));
+                }
+                for (size_t i = 0; i < node->arguments.size() && i < paramTypes.size(); ++i)
+                {
+                    std::string at = visitExpr(node->arguments[i].get());
+                    if (!at.empty() && !paramTypes[i].empty() && !isCompatible(at, paramTypes[i]))
+                    {
+                        error(node->line, node->column, "argument " + std::to_string(i + 1) + " of method '" +
+                              methodName + "' expects '" + paramTypes[i] + "', got '" + at + "'");
+                    }
+                }
+                return retType;
+            }
+        }
+        // 非方法：按成员字段访问检查
         for (auto& arg : node->arguments)
         {
             visitExpr(arg.get());
         }
-        return "f64";
+        error(node->line, node->column, "struct '" + objSym->typeName + "' has no method '" + methodName + "'");
+        return "";
     }
 
     auto sym = symbols.lookup(node->name);
@@ -508,16 +1741,50 @@ std::string Sema::visitCall(FunctionCallNode* node)
         error(node->line, node->column, "call to undefined function '" + node->name + "'");
         return "";
     }
+    // 间接调用：函数指针变量/参数 cb(...)
+    if (sym->kind == SymbolKind::VARIABLE || sym->kind == SymbolKind::PARAMETER)
+    {
+        bool isFuncPtr = sym->typeName == "func";
+        auto pe = pointerElementTypes.find(node->name);
+        if (pe != pointerElementTypes.end() && pe->second == "func") isFuncPtr = true;
+        // 闭包调用：Closure 类型变量
+        if (sym->typeName == "Closure")
+        {
+            for (auto& a : node->arguments) visitExpr(a.get());
+            auto rt = closureReturnTypes.find(currentFunctionName + "." + node->name);
+            return (rt != closureReturnTypes.end()) ? rt->second : "int";
+        }
+        if (isFuncPtr)
+        {
+            for (auto& a : node->arguments) visitExpr(a.get());
+            return ""; // v1：不跟踪签名，视为无返回
+        }
+    }
     if (sym->kind != SymbolKind::FUNCTION)
     {
         error(node->line, node->column, "'" + node->name + "' is not a function");
         return "";
     }
+    // 跨包可见性：非 pub 的跨包函数不可直接调用
+    if (!sym->isPub && !sym->packageName.empty() && sym->packageName != currentPackage)
+    {
+        error(node->line, node->column, "function '" + node->name + "' is not public");
+        return "";
+    }
 
-    // 参数数量检查
+    // 参数数量检查（变参函数允许至少 N 个）
     if (!sym->paramTypes.empty() || !node->arguments.empty())
     {
-        if (sym->paramTypes.size() != node->arguments.size())
+        if (sym->isVariadic)
+        {
+            if (node->arguments.size() < sym->paramTypes.size())
+            {
+                error(node->line, node->column, "function '" + node->name + "' expects at least " +
+                      std::to_string(sym->paramTypes.size()) + " argument(s), got " +
+                      std::to_string(node->arguments.size()));
+            }
+        }
+        else if (sym->paramTypes.size() != node->arguments.size())
         {
             error(node->line, node->column, "function '" + node->name + "' expects " +
                   std::to_string(sym->paramTypes.size()) + " argument(s), got " +
@@ -528,6 +1795,17 @@ std::string Sema::visitCall(FunctionCallNode* node)
     for (size_t i = 0; i < node->arguments.size() && i < sym->paramTypes.size(); ++i)
     {
         std::string argType = visitExpr(node->arguments[i].get());
+        // 闭包实参 → 闭包形参：传播返回类型（键 = 被调函数.参数名）
+        if (sym->paramTypes[i] == "Closure" && i < sym->paramNames.size() &&
+            node->arguments[i]->type == ASTNodeType::VARIABLE_REF)
+        {
+            auto* ref = dynamic_cast<VariableRefNode*>(node->arguments[i].get());
+            auto rt = closureReturnTypes.find(currentFunctionName + "." + ref->name);
+            if (rt != closureReturnTypes.end())
+            {
+                closureReturnTypes[node->name + "." + sym->paramNames[i]] = rt->second;
+            }
+        }
         if (!argType.empty() && !sym->paramTypes[i].empty())
         {
             if (!isCompatible(argType, sym->paramTypes[i]))
@@ -538,6 +1816,169 @@ std::string Sema::visitCall(FunctionCallNode* node)
         }
     }
     return sym->returnType;
+}
+
+// std.thread 编译器内置（仅 spawn / sleep / mutex.create）
+
+std::string Sema::visitThreadCall(FunctionCallNode* node)
+{
+    if (importedModules.find("std.thread") == importedModules.end())
+    {
+        error(node->line, node->column,
+              "module 'std.thread' is not imported (add 'import std.thread;')");
+        return "";
+    }
+
+    const std::string& full = node->name;
+    const size_t argCount = node->arguments.size();
+
+    auto checkArgCount = [&](size_t expected) -> bool
+    {
+        if (argCount == expected) return true;
+        error(node->line, node->column, "function '" + full + "' expects " +
+              std::to_string(expected) + " argument(s), got " + std::to_string(argCount));
+        return false;
+    };
+
+    auto isNumeric = [&](const std::string& t) -> bool
+    {
+        return isNumericType(t);
+    };
+
+    // thread.spawn(fn)：启动线程运行无参函数，返回线程句柄（pointer）
+    if (full == "thread.spawn")
+    {
+        // 一参：无参函数；两参：带一个指针参数的共享内存线程
+        if (argCount < 1 || argCount > 2)
+        {
+            error(node->line, node->column,
+                  "thread.spawn expects 1 argument (function) or 2 (function, shared pointer)");
+            return "";
+        }
+        auto* ref = dynamic_cast<VariableRefNode*>(node->arguments[0].get());
+        std::string fnName = ref ? ref->name : "";
+        if (fnName.empty() || fnName.find('.') != std::string::npos)
+        {
+            error(node->line, node->column, "thread.spawn expects a function name");
+            return "";
+        }
+        auto fnSym = symbols.lookup(fnName);
+        if (!fnSym || fnSym->kind != SymbolKind::FUNCTION)
+        {
+            error(node->line, node->column, "thread.spawn expects a function name, got '" + fnName + "'");
+            return "";
+        }
+        if (argCount == 2)
+        {
+            // 共享内存：目标函数必须恰好一个指针参数，第二参数为指针
+            if (fnSym->paramTypes.size() != 1)
+            {
+                error(node->line, node->column,
+                      "thread.spawn shared function '" + fnName + "' must take exactly 1 pointer parameter");
+                return "";
+            }
+            std::string argType = visitExpr(node->arguments[1].get());
+            if (argType != "pointer" && argType != "ptr")
+            {
+                error(node->line, node->column,
+                      "thread.spawn second argument must be a pointer, got '" + argType + "'");
+                return "";
+            }
+        }
+        else if (!fnSym->paramTypes.empty())
+        {
+            error(node->line, node->column,
+                  "thread.spawn function '" + fnName + "' must not take parameters");
+            return "";
+        }
+        return "pointer";
+    }
+
+    // thread.sleep(ms)：当前线程休眠指定毫秒
+    if (full == "thread.sleep")
+    {
+        if (!checkArgCount(1)) return "";
+        std::string ms = visitExpr(node->arguments[0].get());
+        if (!ms.empty() && !isNumeric(ms))
+        {
+            error(node->line, node->column,
+                  "thread.sleep expects a numeric duration in milliseconds, got '" + ms + "'");
+        }
+        return "";
+    }
+
+    // thread.mutex.create()：从池中分配并初始化一把互斥锁，返回其地址（pointer）
+    if (full == "thread.mutex.create")
+    {
+        if (!checkArgCount(0)) return "";
+        return "pointer";
+    }
+
+    error(node->line, node->column, "unknown function '" + full + "' in module std.thread");
+    return "";
+}
+
+// std.atomic 编译器内置
+
+std::string Sema::visitAtomicCall(FunctionCallNode* node)
+{
+    if (importedModules.find("std.atomic") == importedModules.end())
+    {
+        error(node->line, node->column,
+              "module 'std.atomic' is not imported (add 'import std.atomic;')");
+        return "";
+    }
+    const std::string& full = node->name;
+    const size_t n = node->arguments.size();
+
+    // 第一个参数必须是指针且已知指向整数类型
+    std::string elemType;
+    if (n >= 1 && node->arguments[0]->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = dynamic_cast<VariableRefNode*>(node->arguments[0].get());
+        auto it = pointerElementTypes.find(ref->name);
+        if (it != pointerElementTypes.end()) elemType = it->second;
+    }
+    else
+    {
+        visitExpr(node->arguments[0].get());
+    }
+    if (elemType.empty() || !isNumericType(elemType))
+    {
+        error(node->line, node->column,
+              "'" + full + "' expects a pointer to an integer type");
+        return "";
+    }
+
+    // 固定参数个数：load/exchange=1，store/add/sub=2，cas=3；可带一个内存序参数
+    size_t fixed;
+    if (full == "atomic.load" || full == "atomic.exchange") fixed = 1;
+    else if (full == "atomic.store" || full == "atomic.add" || full == "atomic.sub") fixed = 2;
+    else if (full == "atomic.cas") fixed = 3;
+    else
+    {
+        error(node->line, node->column, "unknown function '" + full + "' in module std.atomic");
+        return "";
+    }
+    if (n < fixed || n > fixed + 1)
+    {
+        error(node->line, node->column, "function '" + full + "' expects " +
+              std::to_string(fixed) + " argument(s) plus optional memory order, got " + std::to_string(n));
+        return "";
+    }
+    for (size_t i = 1; i < fixed; ++i) visitExpr(node->arguments[i].get());
+    if (n == fixed + 1)
+    {
+        std::string ot = visitExpr(node->arguments[n - 1].get());
+        if (!ot.empty() && !isNumericType(ot))
+        {
+            error(node->line, node->column, "memory order must be an integer (0-4), got '" + ot + "'");
+        }
+    }
+
+    if (full == "atomic.store") return "";
+    if (full == "atomic.cas") return "bool";
+    return elemType; // load/add/sub/exchange 返回旧值/当前值，类型为元素类型
 }
 
 std::string Sema::visitLiteralInt(LiteralIntNode* node)
@@ -551,6 +1992,13 @@ std::string Sema::visitLiteralBool(LiteralBoolNode* node) { return "bool"; }
 
 std::string Sema::visitVariableRef(VariableRefNode* node)
 {
+    // 枚举限定常量 Color.RED：类型名打头，值为编译期常量
+    size_t firstDot = node->name.find('.');
+    if (firstDot != std::string::npos)
+    {
+        std::string typeRoot = node->name.substr(0, firstDot);
+        if (enumTypes.count(typeRoot)) return "int";
+    }
     // 成员访问 s.a.foo —— 拆出最前面的名字
     std::string root = node->name.substr(0, node->name.find('.'));
     auto sym = symbols.lookup(root);
@@ -559,12 +2007,139 @@ std::string Sema::visitVariableRef(VariableRefNode* node)
         error(node->line, node->column, "undefined variable '" + root + "'");
         return "";
     }
+    // lambda 捕获：引用外层变量（非 lambda 自身参数/局部）时记录为捕获
+    if (currentLambda && lambdaOwnVars &&
+        !lambdaOwnVars->count(root) && !symbols.lookupLocal(root) &&
+        (sym->kind == SymbolKind::VARIABLE || sym->kind == SymbolKind::PARAMETER))
+    {
+        bool exists = false;
+        for (auto& c : currentLambda->captures)
+        {
+            if (c.first == root) { exists = true; break; }
+        }
+        if (!exists) currentLambda->captures.push_back({root, sym->typeName});
+    }
     if (sym->mutability == SymbolMutability::MOVED)
     {
         error(node->line, node->column, "use of moved variable '" + root + "'");
         return sym->typeName; // 仍返回真实类型，避免级联误报
     }
+    // 结构体成员访问 s.x / a.b.c：逐级解析成员类型
+    size_t dot = node->name.find('.');
+    if (dot != std::string::npos)
+    {
+        std::string curType = sym->typeName;
+        // 指针参数指向结构体（var -> var: Vec<T> v）：v.data 按指向类型解析
+        if ((curType == "pointer" || curType == "ptr") && pointerElementTypes.count(root))
+        {
+            curType = pointerElementTypes[root];
+        }
+        std::string rest = node->name.substr(dot + 1);
+        while (!rest.empty())
+        {
+            size_t next = rest.find('.');
+            std::string member = (next == std::string::npos) ? rest : rest.substr(0, next);
+            rest = (next == std::string::npos) ? "" : rest.substr(next + 1);
+            auto st = structRegistry.find(curType);
+            if (st == structRegistry.end())
+            {
+                error(node->line, node->column, "'" + curType + "' is not a struct");
+                return "";
+            }
+            bool found = false;
+            for (auto& f : st->second.fields)
+            {
+                if (f.first == member) { curType = f.second; found = true; break; }
+            }
+            if (!found)
+            {
+                error(node->line, node->column, "struct '" + curType + "' has no member '" + member + "'");
+                return "";
+            }
+        }
+        return curType;
+    }
     return sym->typeName;
+}
+
+std::string Sema::visitIndex(IndexNode* node)
+{
+    // 数组下标 buf[i]：支持数组变量与指针变量（含参数）
+    std::string elemType;
+    if (node->operand->type == ASTNodeType::VARIABLE_REF)
+    {
+        auto* ref = dynamic_cast<VariableRefNode*>(node->operand.get());
+        // 结构体数组成员 s.arr[i] / s.ptr[i]
+        size_t mdot = ref->name.find('.');
+        if (mdot != std::string::npos)
+        {
+            std::string root = ref->name.substr(0, mdot);
+            std::string member = ref->name.substr(mdot + 1);
+            auto rsym = symbols.lookup(root);
+            if (rsym)
+            {
+                std::string rootType = rsym->typeName;
+                // 指针参数指向结构体（var -> var: Vec<T> v）：v.data 按指向类型解析
+                if ((rootType == "pointer" || rootType == "ptr") && pointerElementTypes.count(root))
+                {
+                    rootType = pointerElementTypes[root];
+                }
+                auto st = structRegistry.find(rootType);
+                if (st != structRegistry.end())
+                {
+                    auto eIt = st->second.fieldElementTypes.find(member);
+                    if (eIt != st->second.fieldElementTypes.end())
+                    {
+                        std::string idxType = visitExpr(node->index.get());
+                        if (!idxType.empty() && !isNumericType(idxType))
+                        {
+                            error(node->line, node->column, "array index must be an integer, got '" + idxType + "'");
+                        }
+                        return eIt->second;
+                    }
+                    // 指针字段 v.data[i]：data 是 var -> var: T
+                    auto pIt = st->second.fieldPointerTypes.find(member);
+                    if (pIt != st->second.fieldPointerTypes.end())
+                    {
+                        std::string idxType = visitExpr(node->index.get());
+                        if (!idxType.empty() && !isNumericType(idxType))
+                        {
+                            error(node->line, node->column, "array index must be an integer, got '" + idxType + "'");
+                        }
+                        return pIt->second;
+                    }
+                }
+            }
+        }
+        auto aIt = arrayElementTypes.find(ref->name);
+        auto pIt = pointerElementTypes.find(ref->name);
+        if (aIt != arrayElementTypes.end())
+        {
+            elemType = aIt->second;
+        }
+        else if (pIt != pointerElementTypes.end())
+        {
+            elemType = pIt->second;
+        }
+        else
+        {
+            auto sym = symbols.lookup(ref->name);
+            error(node->line, node->column,
+                  sym ? "variable '" + ref->name + "' is not an array or pointer"
+                      : "undefined variable '" + ref->name + "'");
+        }
+    }
+    else
+    {
+        error(node->line, node->column, "indexing requires an array or pointer variable");
+    }
+
+    std::string idxType = visitExpr(node->index.get());
+    if (!idxType.empty() && !isNumericType(idxType))
+    {
+        error(node->line, node->column, "array index must be an integer, got '" + idxType + "'");
+    }
+    return elemType;
 }
 
 std::string Sema::visitAssignment(AssignmentNode* node)
@@ -601,6 +2176,22 @@ std::string Sema::visitAssignment(AssignmentNode* node)
 
 // 类型工具
 
+// 取地址表达式的根变量名（&a.b[0] → "a"；&函数名 → 空）
+std::string Sema::rootVarName(ASTNode* node)
+{
+    if (!node) return "";
+    if (node->type == ASTNodeType::VARIABLE_REF)
+    {
+        if (auto* ref = dynamic_cast<VariableRefNode*>(node)) return ref->name;
+    }
+    if (node->type == ASTNodeType::VARIABLE_REF || node->type == ASTNodeType::FUNCTION_CALL)
+    {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(node)) return rootVarName(ma->object.get());
+    }
+    if (auto* idx = dynamic_cast<IndexNode*>(node)) return rootVarName(idx->operand.get());
+    return "";
+}
+
 std::string Sema::typeNodeToName(TypeNode* type)
 {
     if (!type) return "";
@@ -628,53 +2219,32 @@ std::string Sema::typeNodeToName(TypeNode* type)
 
 bool Sema::isNumericType(const std::string& type) const
 {
+    if (enumTypes.count(type)) return true;   // enum 按 int 处理
     return type == "int" || type == "i8" || type == "i16" || type == "i64" ||
            type == "uint" || type == "u8" || type == "u16" || type == "u64" ||
-           type == "f32" || type == "f64";
+           type == "f32" || type == "f64" || type == "char"; // char 即 u8
 }
 
 bool Sema::isBuiltinType(const std::string& type) const
 {
     return isNumericType(type) || type == "char" || type == "string" ||
            type == "bool" || type == "pointer" || type == "array" ||
-           type == "wchar" || type == "wstring";
+           type == "wchar" || type == "wstring" || type == "ptr" || type == "func" ||
+           type == "Closure";
 }
 
 bool Sema::isCompatible(const std::string& from, const std::string& to) const
 {
-    if (from == to) return true;
-
-    // int/uint 别名
-    if ((from == "int" && to == "i32") || (from == "i32" && to == "int")) return true;
-    if ((from == "uint" && to == "u32") || (from == "u32" && to == "uint")) return true;
-
-    // 整数提升：小类型可安全赋给大类型
-    static const std::vector<std::string> intRank = {
-        "i8", "u8", "i16", "u16", "int", "uint", "i32", "u32", "i64", "u64"
-    };
-    size_t rf = intRank.size(), rt = intRank.size();
-    for (size_t i = 0; i < intRank.size(); ++i)
-    {
-        if (intRank[i] == from) rf = i;
-        if (intRank[i] == to) rt = i;
-    }
-    if (rf < intRank.size() && rt < intRank.size() && rf < rt)
-    {
-        return true; // 整数拓宽允许
-    }
-
-    // 整数 → 浮点
-    if (to == "f32" || to == "f64")
-    {
-        if (rf < intRank.size()) return true;
-    }
-
-    return false;
+    // enum 类型按 int 处理
+    std::string f = enumTypes.count(from) ? "int" : from;
+    std::string t = enumTypes.count(to) ? "int" : to;
+    // D1：类型对象化判断（等价/拓宽/衰减规则集中在 TypeSystem）
+    return TypeSystem::compatible(TypeSystem::fromName(f), TypeSystem::fromName(t));
 }
 
 bool Sema::isWidening(const std::string& from, const std::string& to) const
 {
-    // from 比 to 宽：窄化赋值，可能丢失精度
+    // 窄化赋值（from 比 to 宽），可能丢失精度
     if (from == "f64" && (to == "f32" || isNumericType(to) && to != "f64")) return true;
     if (from == "f32" && to != "f64" && isNumericType(to)) return true;
     if ((from == "i64" || from == "u64") && (to == "int" || to == "i32" || to == "uint" ||

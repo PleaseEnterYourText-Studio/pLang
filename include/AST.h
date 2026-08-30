@@ -29,12 +29,14 @@ enum class ASTNodeType
     USING_DECL,
     STRUCT_DECL,
     IMPL_DECL,
+    EXTERN_VAR_DECL,
 
     // 表达式
     LITERAL_INT,
     LITERAL_FLOAT,
     LITERAL_STRING,
     LITERAL_BOOL,
+    LITERAL_NULL,
     VARIABLE_REF,
     BINARY_OP,
     UNARY_OP,
@@ -46,12 +48,21 @@ enum class ASTNodeType
     THIS_REF,
     TYPE_PARAM,
     TEMPLATE_DECL,
-    DO_WHILE_STMT,
+    ENUM_DECL,
+    BREAK_STMT,
+    CONTINUE_STMT,
+    GOTO_STMT,
+    LABEL_STMT,
+    SWITCH_STMT,
     MEMBER_ACCESS,
     ADDRESS_OF,
     DEREF,
+    INDEX,
     STRUCT_INIT,
     SIZEOF_EXPR,
+    ASM_STMT,
+    LAMBDA_EXPR,
+    TRY_EXPR,
 
     // 类型
     TYPE_PRIMITIVE,
@@ -168,6 +179,13 @@ struct LiteralBoolNode : ASTNode
     : ASTNode(ASTNodeType::LITERAL_BOOL, line, column), value(value) {};
 };
 
+//空指针字面量节点
+struct NullNode : ASTNode
+{
+    NullNode(int line = 0, int column = 0)
+    : ASTNode(ASTNodeType::LITERAL_NULL, line, column) {};
+};
+
 //引用节点
 struct VariableRefNode : ASTNode 
 {
@@ -205,6 +223,17 @@ struct AddressOfNode : ASTNode
 
     explicit AddressOfNode(std::unique_ptr<ASTNode> operand, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::UNARY_OP, line, column), operand(std::move(operand)) {}
+};
+
+// 数组下标节点 buf[i]
+struct IndexNode : ASTNode
+{
+    std::unique_ptr<ASTNode> operand;   // 数组/指针变量
+    std::unique_ptr<ASTNode> index;     // 下标表达式
+
+    IndexNode(std::unique_ptr<ASTNode> operand, std::unique_ptr<ASTNode> index, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::INDEX, line, column),
+          operand(std::move(operand)), index(std::move(index)) {}
 };
 
 // 类型转换节点
@@ -320,11 +349,14 @@ struct VariableDeclNode : ASTNode
     std::string name;
     std::unique_ptr<TypeNode> type;
     std::unique_ptr<ASTNode> initializer;
+    int bitWidth;               // 位域宽度（0=普通字段）
+    bool isVolatile;            // volatile 修饰
 
     VariableDeclNode(bool isVar, bool isMoved, const std::string& name, std::unique_ptr<TypeNode> type,
-                     std::unique_ptr<ASTNode> initializer, int line = 0, int column = 0)
+                     std::unique_ptr<ASTNode> initializer, int line = 0, int column = 0, int bitWidth = 0,
+                     bool isVolatile = false)
         : ASTNode(ASTNodeType::VARIABLE_DECL, line, column), isVar(isVar), isMoved(isMoved), name(name),
-          type(std::move(type)), initializer(std::move(initializer)) {}
+          type(std::move(type)), initializer(std::move(initializer)), bitWidth(bitWidth), isVolatile(isVolatile) {}
 };
 
 // 赋值语句
@@ -339,6 +371,19 @@ struct AssignmentNode : ASTNode
           value(std::move(value)), op(op) {}
 };
 
+// extern 全局数据声明 extern var stdin : ptr;
+struct ExternVarDeclNode : ASTNode
+{
+    std::string name;
+    std::unique_ptr<TypeNode> type;
+    bool isVar;
+
+    ExternVarDeclNode(const std::string& name, std::unique_ptr<TypeNode> type, bool isVar,
+                      int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::EXTERN_VAR_DECL, line, column),
+          name(name), type(std::move(type)), isVar(isVar) {}
+};
+
 // return 语句
 struct ReturnStmtNode : ASTNode
 {
@@ -346,15 +391,6 @@ struct ReturnStmtNode : ASTNode
 
     ReturnStmtNode(std::unique_ptr<ASTNode> value, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::RETURN_STMT, line, column), value(std::move(value)) {}
-};
-
-// 表达式语句
-struct ExpressionStmtNode : ASTNode
-{
-    std::unique_ptr<ASTNode> expr;
-
-    ExpressionStmtNode(std::unique_ptr<ASTNode> expr, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::EXPRESSION_STMT, line, column), expr(std::move(expr)) {}
 };
 
 // 块语句
@@ -367,6 +403,66 @@ struct BlockStmtNode : ASTNode
 };
 
 // if 语句
+// goto 语句
+struct GotoStmtNode : ASTNode
+{
+    std::string label;
+
+    GotoStmtNode(const std::string& label, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::GOTO_STMT, line, column), label(label) {}
+};
+
+// break 语句（跳出当前循环）
+struct BreakStmtNode : ASTNode
+{
+    BreakStmtNode(int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::BREAK_STMT, line, column) {}
+};
+
+// continue 语句（跳到当前循环的更新/条件处）
+struct ContinueStmtNode : ASTNode
+{
+    ContinueStmtNode(int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::CONTINUE_STMT, line, column) {}
+};
+
+// label 语句
+struct LabelStmtNode : ASTNode
+{
+    std::string name;
+
+    LabelStmtNode(const std::string& name, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::LABEL_STMT, line, column), name(name) {}
+};
+
+// switch 分支
+struct SwitchCase
+{
+    long long value = 0;        // case 常量值
+    bool isDefault = false;
+    std::unique_ptr<BlockStmtNode> body;
+};
+
+// switch 语句（隐式 break，case 之间不贯穿）
+struct SwitchStmtNode : ASTNode
+{
+    std::unique_ptr<ASTNode> condition;
+    std::vector<SwitchCase> cases;
+
+    SwitchStmtNode(std::unique_ptr<ASTNode> condition, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::SWITCH_STMT, line, column), condition(std::move(condition)) {}
+};
+
+// 表达式语句
+struct ExpressionStmtNode : ASTNode
+{
+    std::unique_ptr<ASTNode> expr;
+
+    ExpressionStmtNode(std::unique_ptr<ASTNode> expr, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::EXPRESSION_STMT, line, column), expr(std::move(expr)) {}
+};
+
+
 struct IfStmtNode : ASTNode
 {
     std::unique_ptr<ASTNode> condition;
@@ -421,10 +517,39 @@ struct FunctionDeclNode : ASTNode
     std::vector<std::unique_ptr<ParameterNode>> params;
     std::unique_ptr<TypeNode> returnType;
     std::unique_ptr<BlockStmtNode> body;
+    std::vector<std::string> typeParams;    // 泛型参数（如 <T: type> 的 T；空=普通函数）
     bool hasBody;
+    bool isExtern;          // extern func：FFI 声明，不生成定义
+    bool isPub;             // pub：跨包可见
+    bool isVariadic;        // 变参函数（extern ...）
+    std::string packageName; // 所属包（如 "std.thread"），由解析器在合并/解析时标注
+    std::vector<std::pair<std::string, std::string>> captures;  // lambda 生成的函数：捕获变量 {名字, 类型}
 
     FunctionDeclNode(const std::string& name, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::FUNCTION_DECL, line, column), name(name), hasBody(false) {}
+        : ASTNode(ASTNodeType::FUNCTION_DECL, line, column), name(name), hasBody(false),
+          isExtern(false), isPub(false), isVariadic(false) {}
+};
+
+// lambda 闭包表达式：lambda (params) : ret { body }
+struct LambdaExprNode : ASTNode
+{
+    std::vector<std::unique_ptr<ParameterNode>> params;
+    std::unique_ptr<TypeNode> returnType;
+    std::unique_ptr<BlockStmtNode> body;
+    std::vector<std::pair<std::string, std::string>> captures;  // 捕获变量 {名字, 类型}（Sema 填充）
+    std::string generatedName;                                  // 生成的 lambda 函数名（Sema 填充）
+
+    LambdaExprNode(int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::LAMBDA_EXPR, line, column) {}
+};
+
+// ? 错误传播：expr? —— expr 为 Result<T,E>，错误时返回当前函数的错误
+struct TryExprNode : ASTNode
+{
+    std::unique_ptr<ASTNode> operand;
+
+    TryExprNode(std::unique_ptr<ASTNode> operand, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::TRY_EXPR, line, column), operand(std::move(operand)) {}
 };
 
 // struct 声明
@@ -432,11 +557,13 @@ struct StructDeclNode : ASTNode
 {
     std::string name;
     bool isAbstract;
+    bool isUnion;               // union：所有成员共享同一内存
+    int alignBytes;             // 对齐（0=默认）
+    std::vector<std::string> typeParams;  // 泛型参数（如 <T: type> 的 T）
     std::vector<std::string> bases;
-    std::vector<std::unique_ptr<ASTNode>> members;
-
-    StructDeclNode(const std::string& name, bool isAbstract, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::STRUCT_DECL, line, column), name(name), isAbstract(isAbstract) {}
+    std::vector<std::unique_ptr<ASTNode>> members;    StructDeclNode(const std::string& name, bool isAbstract, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::STRUCT_DECL, line, column), name(name), isAbstract(isAbstract),
+          isUnion(false), alignBytes(0) {}
 };
 
 // impl 实现
@@ -449,20 +576,28 @@ struct ImplDeclNode : ASTNode
         : ASTNode(ASTNodeType::IMPL_DECL, line, column), target(target) {}
 };
 
-// ==================== 以下节点结构来自 main 分支 (81fd524) ====================
-// 作为后续功能实现的设计参考，构造函数已补全内联实现
-
-// ===== do-while 语句 =====
-struct DoWhileStmtNode : ASTNode
+// enum 枚举：C 风格整型常量
+struct EnumVariant
 {
-    std::unique_ptr<ASTNode> condition;
-    std::unique_ptr<ASTNode> body;
-
-    DoWhileStmtNode(std::unique_ptr<ASTNode> condition, std::unique_ptr<ASTNode> body, int line = 0, int column = 0)
-        : ASTNode(ASTNodeType::WHILE_STMT, line, column), condition(std::move(condition)), body(std::move(body)) {}
+    std::string name;
+    long long value = 0;
+    bool hasValue = false;
 };
 
-// ===== 成员访问 =====
+struct EnumDeclNode : ASTNode
+{
+    std::string name;
+    std::vector<EnumVariant> variants;
+
+    EnumDeclNode(const std::string& name, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::ENUM_DECL, line, column), name(name) {}
+};
+
+// 以下节点结构来自 main 分支 (81fd524)
+// 作为后续功能实现的设计参考，构造函数已补全内联实现
+
+// do-while 语句
+// 成员访问
 struct MemberAccessNode : ASTNode
 {
     std::unique_ptr<ASTNode> object;
@@ -473,7 +608,7 @@ struct MemberAccessNode : ASTNode
         : ASTNode(ASTNodeType::VARIABLE_REF, line, column), object(std::move(object)), member(member), isMethodCall(isMethodCall) {}
 };
 
-// ===== 解引用 =====
+// 解引用
 struct DerefNode : ASTNode
 {
     std::unique_ptr<ASTNode> operand;
@@ -482,7 +617,7 @@ struct DerefNode : ASTNode
         : ASTNode(ASTNodeType::UNARY_OP, line, column), operand(std::move(operand)) {}
 };
 
-// ===== 引用类型 =====
+// 引用类型
 struct ReferenceTypeNode : TypeNode
 {
     bool isMutable;
@@ -491,7 +626,7 @@ struct ReferenceTypeNode : TypeNode
         : TypeNode(ASTNodeType::TYPE_REFERENCE, "", line, column, 0, std::move(inner)), isMutable(isMutable) {}
 };
 
-// ===== 模板参数 =====
+// 模板参数
 struct TemplateParamNode : ASTNode
 {
     std::string name;
@@ -501,7 +636,7 @@ struct TemplateParamNode : ASTNode
         : ASTNode(ASTNodeType::TYPE_PARAM, line, column), name(name), isTypeParam(isTypeParam) {}
 };
 
-// ===== 模板声明 =====
+// 模板声明
 struct TemplateDeclNode : ASTNode
 {
     std::vector<std::unique_ptr<TemplateParamNode>> params;
@@ -511,14 +646,14 @@ struct TemplateDeclNode : ASTNode
         : ASTNode(ASTNodeType::TEMPLATE_DECL, line, column), params(std::move(params)), body(std::move(body)) {}
 };
 
-// ===== this 引用 =====
+// this 引用
 struct ThisRefNode : ASTNode
 {
     ThisRefNode(int line = 0, int column = 0)
         : ASTNode(ASTNodeType::THIS_REF, line, column) {}
 };
 
-// ===== 类型转换 =====
+// 类型转换
 struct CastExprNode : ASTNode
 {
     std::unique_ptr<ASTNode> expr;
@@ -528,13 +663,31 @@ struct CastExprNode : ASTNode
         : ASTNode(ASTNodeType::CAST_EXPR, line, column), expr(std::move(expr)), targetType(std::move(targetType)) {}
 };
 
-// ===== sizeof 表达式 =====
+// sizeof 表达式
 struct SizeofExprNode : ASTNode
 {
     std::unique_ptr<TypeNode> targetType;
 
     explicit SizeofExprNode(std::unique_ptr<TypeNode> targetType, int line = 0, int column = 0)
         : ASTNode(ASTNodeType::SIZEOF_EXPR, line, column), targetType(std::move(targetType)) {}
+};
+
+// 内联汇编 asm{}
+struct AsmOperand
+{
+    std::string constraint;    // 如 "r", "=r"
+    std::string name;          // 绑定的变量/表达式
+};
+
+struct AsmNode : ASTNode
+{
+    std::string template_str;  // AT&T 汇编模板
+    std::vector<AsmOperand> outputs;   // 输出操作数
+    std::vector<AsmOperand> inputs;    // 输入操作数
+    std::vector<std::string> clobbers; // 破坏列表
+
+    AsmNode(const std::string& templateStr, int line = 0, int column = 0)
+        : ASTNode(ASTNodeType::ASM_STMT, line, column), template_str(templateStr) {}
 };
 
 #endif

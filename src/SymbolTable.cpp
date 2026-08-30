@@ -28,6 +28,19 @@ bool SymbolTable::declare(const std::string& name, std::shared_ptr<Symbol> symbo
     return true;
 }
 
+bool SymbolTable::declareGlobal(const std::string& name, std::shared_ptr<Symbol> symbol)
+{
+    // 根作用域声明（跨函数可见，泛型实例化用）
+    std::shared_ptr<Scope> root = current;
+    while (root->parent) root = root->parent;
+    if (root->symbols.find(name) != root->symbols.end())
+    {
+        return false;
+    }
+    root->symbols[name] = std::move(symbol);
+    return true;
+}
+
 std::shared_ptr<Symbol> SymbolTable::lookup(const std::string& name) const
 {
     auto scope = current;

@@ -15,13 +15,17 @@ enum class TokenType
 
     //关键字
     PACKAGE, IMPORT,
-    VAR, VAL, MOVE,
+    VAR, VAL, MOVE, VOLATILE,
     FUNC, IMPL, RETURN,
-    USING, STRUCT, ABSTRACT,
+    USING, STRUCT, ABSTRACT, UNION, ALIGN, ENUM,
     PUB, PRT, PRI,
     THIS, THIS_TYPE, TYPE,
     AS,
-    IF, ELSE, WHILE, FOR, DO,
+    IF, ELSE, WHILE, FOR, ASM, LAMBDA,
+    GOTO, LABEL, SWITCH, CASE, DEFAULT, BREAK, CONTINUE,
+    SIZEOF,      // sizeof(T) 类型大小
+    EXTERN,      // extern func 声明（FFI）
+    NULL_LIT,    // null 空指针字面量
 
     //内置类型名
     INT, CHAR, STRING_TYPE, WCHAR, WSTRING, BOOL,
@@ -37,7 +41,7 @@ enum class TokenType
     EQ, NE,          // == !=
     LT, LE, GT, GE,  // < <= > >=
     AND, OR, NOT,    // && || !
-    AMP, PIPE, CARET, TILDE, SHL, SHR,  // & | ^ ~ << >>
+    AMP, PIPE, CARET, TILDE, SHL, SHR, QUESTION,  // & | ^ ~ << >> ?
     PLUS_ASSIGN, MINUS_ASSIGN, STAR_ASSIGN, SLASH_ASSIGN, PERCENT_ASSIGN, // += -= *= /= %=
     SHL_ASSIGN, SHR_ASSIGN, AMP_ASSIGN, PIPE_ASSIGN, CARET_ASSIGN,        // <<= >>= &= |= ^=
     INC, DEC,        // ++ --
@@ -70,12 +74,17 @@ public:
             {TokenType::IDENT, "IDENT"}, {TokenType::NUMBER, "NUMBER"}, {TokenType::STRING, "STRING"}, {TokenType::CHAR_LIT, "CHAR_LIT"},
             {TokenType::PACKAGE, "PACKAGE"}, {TokenType::IMPORT, "IMPORT"},
             {TokenType::VAR, "VAR"}, {TokenType::VAL, "VAL"}, {TokenType::MOVE, "MOVE"},
+            {TokenType::VOLATILE, "VOLATILE"},
             {TokenType::FUNC, "FUNC"}, {TokenType::IMPL, "IMPL"}, {TokenType::RETURN, "RETURN"},
             {TokenType::USING, "USING"}, {TokenType::STRUCT, "STRUCT"}, {TokenType::ABSTRACT, "ABSTRACT"},
+            {TokenType::UNION, "UNION"}, {TokenType::ALIGN, "ALIGN"}, {TokenType::ENUM, "ENUM"},
             {TokenType::PUB, "PUB"}, {TokenType::PRT, "PRT"}, {TokenType::PRI, "PRI"},
             {TokenType::THIS, "THIS"}, {TokenType::THIS_TYPE, "THIS_TYPE"}, {TokenType::TYPE, "TYPE"},
             {TokenType::AS, "AS"},
-            {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::DO, "DO"},
+            {TokenType::IF, "IF"}, {TokenType::ELSE, "ELSE"}, {TokenType::WHILE, "WHILE"}, {TokenType::FOR, "FOR"}, {TokenType::ASM, "ASM"}, {TokenType::LAMBDA, "LAMBDA"},
+            {TokenType::GOTO, "GOTO"}, {TokenType::LABEL, "LABEL"}, {TokenType::SWITCH, "SWITCH"}, {TokenType::CASE, "CASE"}, {TokenType::DEFAULT, "DEFAULT"}, {TokenType::BREAK, "BREAK"}, {TokenType::CONTINUE, "CONTINUE"},
+            {TokenType::SIZEOF, "SIZEOF"},
+            {TokenType::EXTERN, "EXTERN"}, {TokenType::NULL_LIT, "NULL_LIT"},
             {TokenType::INT, "INT"}, {TokenType::CHAR, "CHAR"}, {TokenType::STRING_TYPE, "STRING_TYPE"}, {TokenType::WCHAR, "WCHAR"}, {TokenType::WSTRING, "WSTRING"}, {TokenType::BOOL, "BOOL"},
             {TokenType::TRUE, "TRUE"}, {TokenType::FALSE, "FALSE"},
             {TokenType::I32, "I32"}, {TokenType::I16, "I16"}, {TokenType::I64, "I64"}, {TokenType::I8, "I8"},
@@ -86,7 +95,7 @@ public:
             {TokenType::EQ, "EQ"}, {TokenType::NE, "NE"},
             {TokenType::LT, "LT"}, {TokenType::LE, "LE"}, {TokenType::GT, "GT"}, {TokenType::GE, "GE"},
             {TokenType::AND, "AND"}, {TokenType::OR, "OR"}, {TokenType::NOT, "NOT"},
-            {TokenType::AMP, "AMP"}, {TokenType::PIPE, "PIPE"}, {TokenType::CARET, "CARET"}, {TokenType::TILDE, "TILDE"}, {TokenType::SHL, "SHL"}, {TokenType::SHR, "SHR"},
+            {TokenType::AMP, "AMP"}, {TokenType::PIPE, "PIPE"}, {TokenType::CARET, "CARET"}, {TokenType::TILDE, "TILDE"}, {TokenType::SHL, "SHL"}, {TokenType::SHR, "SHR"}, {TokenType::QUESTION, "QUESTION"},
             {TokenType::PLUS_ASSIGN, "PLUS_ASSIGN"}, {TokenType::MINUS_ASSIGN, "MINUS_ASSIGN"}, {TokenType::STAR_ASSIGN, "STAR_ASSIGN"}, {TokenType::SLASH_ASSIGN, "SLASH_ASSIGN"}, {TokenType::PERCENT_ASSIGN, "PERCENT_ASSIGN"},
             {TokenType::SHL_ASSIGN, "SHL_ASSIGN"}, {TokenType::SHR_ASSIGN, "SHR_ASSIGN"}, {TokenType::AMP_ASSIGN, "AMP_ASSIGN"}, {TokenType::PIPE_ASSIGN, "PIPE_ASSIGN"}, {TokenType::CARET_ASSIGN, "CARET_ASSIGN"},
             {TokenType::INC, "INC"}, {TokenType::DEC, "DEC"}, {TokenType::ARROW, "ARROW"}, {TokenType::AT, "AT"},

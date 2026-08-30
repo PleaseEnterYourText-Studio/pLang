@@ -1,0 +1,5 @@
+package std.atomic;
+
+// PLang 标准库：原子操作（编译器内置，LLVM atomicrmw/cmpxchg）。
+// 内存序参数（可选）：0=relaxed 1=acquire 2=release 3=acq_rel 4=seq_cst（默认）。
+// 用法：var -> var: int p = &shared; atomic.add(p, 1); var: int old = atomic.exchange(p, 0);

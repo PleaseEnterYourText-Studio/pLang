@@ -11,6 +11,7 @@ Parser::Parser(std::vector<Token> tokens) : tokens(std::move(tokens)), pos(0) {}
 std::unique_ptr<ProgramNode> Parser::parse()
 {
     auto program = std::make_unique<ProgramNode>();
+    genericPendingGT = false;
 
     // package 声明（可选但应在前）
     if (match(TokenType::PACKAGE))
@@ -29,8 +30,26 @@ std::unique_ptr<ProgramNode> Parser::parse()
         }
         else
         {
-            auto decl = parseDeclaration();
-            if (decl) program->decls.push_back(std::move(decl));
+            try
+            {
+                auto decl = parseDeclaration();
+                // 标注函数所属包（供跨包可见性检查与包限定调用解析使用）
+                if (decl)
+                {
+                    if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get()))
+                    {
+                        fn->packageName = program->packageName;
+                    }
+                }
+                if (decl) program->decls.push_back(std::move(decl));
+            }
+            catch (const std::runtime_error& e)
+            {
+                // 错误恢复：记录并跳到下一个顶层声明
+                errors.push_back({errorLine, errorColumn, e.what()});
+                while (!check(TokenType::SEMICOLON) && !isAtEnd()) advance();
+                match(TokenType::SEMICOLON);
+            }
         }
     }
     return program;
@@ -140,9 +159,64 @@ std::unique_ptr<TypeNode> Parser::parseType()
 }
 
 // 类型（不含 var/val 修饰符前缀）
+// 类型节点的文本形式（泛型参数名拼接用）
+static std::string typeNodeText(TypeNode* t)
+{
+    if (!t) return "";
+    switch (t->baseType)
+    {
+        case ASTNodeType::TYPE_I8: return "i8";
+        case ASTNodeType::TYPE_I16: return "i16";
+        case ASTNodeType::TYPE_I32: return "int";
+        case ASTNodeType::TYPE_I64: return "i64";
+        case ASTNodeType::TYPE_U8: return "u8";
+        case ASTNodeType::TYPE_U16: return "u16";
+        case ASTNodeType::TYPE_U32: return "uint";
+        case ASTNodeType::TYPE_U64: return "u64";
+        case ASTNodeType::TYPE_F32: return "f32";
+        case ASTNodeType::TYPE_F64: return "f64";
+        case ASTNodeType::TYPE_CHAR: return "char";
+        case ASTNodeType::TYPE_BOOL: return "bool";
+        case ASTNodeType::TYPE_STRING: return "string";
+        case ASTNodeType::TYPE_POINTER: return "var -> var: " + typeNodeText(t->inner.get());
+        case ASTNodeType::TYPE_ARRAY: return typeNodeText(t->inner.get()) + "[" + std::to_string(t->arraySize) + "]";
+        default: return t->name;
+    }
+}
+
 std::unique_ptr<TypeNode> Parser::parseTypeSuffix()
 {
     auto typeNode = parsePrimitiveType();
+
+    // 泛型实例化 Name<T1, T2>
+    if (typeNode->baseType == ASTNodeType::TYPE_PRIMITIVE && check(TokenType::LT))
+    {
+        std::string gname = typeNode->name + "<";
+        advance(); // <
+        do
+        {
+            auto argTy = parseTypeSuffix();
+            gname += typeNodeText(argTy.get());
+            if (check(TokenType::COMMA)) gname += ",";
+        } while (match(TokenType::COMMA));
+        // 期望 >（嵌套泛型的 >> 会被词法拆成 SHR，这里拆回两个 >）
+        if (genericPendingGT)
+        {
+            genericPendingGT = false;
+        }
+        else if (match(TokenType::GT)) { /* 已消费 */ }
+        else if (match(TokenType::SHR))
+        {
+            genericPendingGT = true; // 剩下半个 > 留给外层
+        }
+        else
+        {
+            expect(TokenType::GT, "expected > to close generic arguments");
+        }
+        gname += ">";
+        typeNode = std::make_unique<TypeNode>(ASTNodeType::TYPE_PRIMITIVE, gname,
+                                              typeNode->line, typeNode->column);
+    }
 
     // 后缀数组 T[n]
     while (match(TokenType::LBRACKET))
@@ -180,6 +254,7 @@ std::unique_ptr<TypeNode> Parser::parsePrimitiveType()
         case TokenType::F32: nodeType = ASTNodeType::TYPE_F32; break;
         case TokenType::F64: nodeType = ASTNodeType::TYPE_F64; break;
         case TokenType::CHAR: nodeType = ASTNodeType::TYPE_CHAR; break;
+        case TokenType::FUNC: nodeType = ASTNodeType::TYPE_PRIMITIVE; name = "func"; break;
         case TokenType::STRING_TYPE: nodeType = ASTNodeType::TYPE_STRING; break;
         case TokenType::BOOL: nodeType = ASTNodeType::TYPE_BOOL; break;
         case TokenType::THIS_TYPE: nodeType = ASTNodeType::TYPE_TYPE; break;
@@ -195,7 +270,41 @@ std::unique_ptr<TypeNode> Parser::parsePrimitiveType()
 
 std::unique_ptr<ASTNode> Parser::parseDeclaration()
 {
+    // 顶层可见性修饰：pub func / pub struct（仅函数在 v1 生效）
+    if (match(TokenType::PUB))
+    {
+        auto decl = parseDeclaration();
+        if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl.get()))
+        {
+            fn->isPub = true;
+        }
+        return decl;
+    }
+
+    // extern FFI 声明：extern var stdin : ptr; / extern func ...
+    if (match(TokenType::EXTERN))
+    {
+        if (match(TokenType::VAR) || match(TokenType::VAL))
+        {
+            // extern 全局数据
+            bool isVar = previous().type == TokenType::VAR;
+            Token gname = expect(TokenType::IDENT, "expected extern variable name");
+            expect(TokenType::COLON, "expected : after extern variable name");
+            auto gtype = parseTypeSuffix();
+            expect(TokenType::SEMICOLON, "expected ;");
+            return std::make_unique<ExternVarDeclNode>(gname.text, std::move(gtype), isVar,
+                                                       gname.line, gname.column);
+        }
+        auto fn = parseFunctionDecl();
+        if (auto* fnNode = dynamic_cast<FunctionDeclNode*>(fn.get()))
+        {
+            fnNode->isExtern = true;
+        }
+        return fn;
+    }
+
     if (match(TokenType::USING)) return parseUsing();
+    if (check(TokenType::ENUM)) return parseEnum();
     if (check(TokenType::FUNC)) return parseFunctionDecl();
     if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT)) return parseStructDecl();
     if (check(TokenType::IMPL)) return parseImplDecl();
@@ -207,9 +316,15 @@ std::unique_ptr<ASTNode> Parser::parseDeclaration()
 
 std::unique_ptr<ASTNode> Parser::parsePackage()
 {
-    Token name = expect(TokenType::IDENT, "expected package name");
+    Token name = expectPathSegment("expected package name");
+    std::string pkgName = name.text;
+    while (match(TokenType::DOT) || match(TokenType::SLASH))
+    {
+        std::string sep = (previous().type == TokenType::DOT) ? "." : "/";
+        pkgName += sep + expectPathSegment("expected package path segment").text;
+    }
     expect(TokenType::SEMICOLON, "expected ;");
-    return std::make_unique<PackageStmtNode>(name.text, name.line, name.column);
+    return std::make_unique<PackageStmtNode>(pkgName, name.line, name.column);
 }
 
 std::unique_ptr<ASTNode> Parser::parseImport()
@@ -217,10 +332,11 @@ std::unique_ptr<ASTNode> Parser::parseImport()
     std::string path;
     Token first = expectPathSegment("expected import path");
     path = first.text;
-    while (match(TokenType::DOT))
+    while (match(TokenType::DOT) || match(TokenType::SLASH))
     {
+        std::string sep = (previous().type == TokenType::DOT) ? "." : "/";
         Token part = expectPathSegment("expected path segment");
-        path += "." + part.text;
+        path += sep + part.text;
     }
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<ImportStmtNode>(path, first.line, first.column);
@@ -246,7 +362,7 @@ std::unique_ptr<ASTNode> Parser::parseUsing()
     expect(TokenType::ASSIGN, "expected =");
     std::unique_ptr<ASTNode> aliased;
 
-    if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT))
+    if (check(TokenType::STRUCT) || check(TokenType::ABSTRACT) || check(TokenType::UNION))
     {
         aliased = parseStructDecl(true);
         // 匿名结构体：把 using 的别名作为结构体名
@@ -284,13 +400,123 @@ std::unique_ptr<ASTNode> Parser::parseUsing()
     return std::make_unique<UsingDeclNode>(name.text, std::move(aliased), name.line, name.column);
 }
 
+// enum Color { RED, GREEN = 3, BLUE }
+std::unique_ptr<ASTNode> Parser::parseEnum()
+{
+    Token start = expect(TokenType::ENUM, "expected enum");
+    Token name = expect(TokenType::IDENT, "expected enum name");
+    auto en = std::make_unique<EnumDeclNode>(name.text, start.line, start.column);
+    expect(TokenType::LBRACE, "expected { after enum name");
+    long long next = 0;
+    while (!check(TokenType::RBRACE) && !isAtEnd())
+    {
+        Token vname = expect(TokenType::IDENT, "expected enum variant name");
+        EnumVariant v;
+        v.name = vname.text;
+        if (match(TokenType::ASSIGN))
+        {
+            Token num = expect(TokenType::NUMBER, "expected integer value after =");
+            v.value = std::stoll(num.text);
+            v.hasValue = true;
+        }
+        else
+        {
+            v.value = next;
+        }
+        next = v.value + 1;
+        en->variants.push_back(v);
+        if (!match(TokenType::COMMA)) break;
+    }
+    expect(TokenType::RBRACE, "expected } after enum body");
+    return en;
+}
+
+std::unique_ptr<ASTNode> Parser::parseLambda()
+{
+    Token start = expect(TokenType::LAMBDA, "expected lambda");
+    auto lam = std::make_unique<LambdaExprNode>(start.line, start.column);
+
+    expect(TokenType::LPAREN, "expected ( after lambda");
+    if (!check(TokenType::RPAREN))
+    {
+        do
+        {
+            bool isVar = true;
+            if (match(TokenType::VAL)) isVar = false;
+            else if (!match(TokenType::VAR))
+            {
+                errorLine = peek().line;
+                errorColumn = peek().column;
+                throw std::runtime_error("expected parameter modifier val/var");
+            }
+            std::unique_ptr<TypeNode> paramType;
+            if (check(TokenType::ARROW))
+            {
+                advance();
+                if (match(TokenType::VAR)) { }
+                else if (match(TokenType::VAL)) { }
+                std::unique_ptr<TypeNode> inner;
+                if (match(TokenType::COLON)) inner = parseTypeSuffix();
+                paramType = std::make_unique<TypeNode>(ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                                                       0, std::move(inner), false);
+            }
+            else
+            {
+                expect(TokenType::COLON, "expected : after parameter modifier");
+                paramType = parseTypeSuffix();
+            }
+            Token pname = expect(TokenType::IDENT, "expected parameter name");
+            lam->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(paramType),
+                                                                  pname.line, pname.column));
+        } while (match(TokenType::COMMA));
+    }
+    expect(TokenType::RPAREN, "expected )");
+
+    if (match(TokenType::COLON))
+    {
+        lam->returnType = parseType();
+    }
+    else if (match(TokenType::ARROW))
+    {
+        if (check(TokenType::VAR) || check(TokenType::VAL))
+        {
+            bool innerConst = false;
+            if (match(TokenType::VAR)) { }
+            else if (match(TokenType::VAL)) { innerConst = true; }
+            std::unique_ptr<TypeNode> inner;
+            if (match(TokenType::COLON)) inner = parseTypeSuffix();
+            else inner = parsePrimitiveType();
+            lam->returnType = std::make_unique<TypeNode>(
+                ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                0, std::move(inner), innerConst);
+        }
+        else
+        {
+            lam->returnType = parseType();
+        }
+    }
+
+    lam->body = std::unique_ptr<BlockStmtNode>(dynamic_cast<BlockStmtNode*>(parseBlock().release()));
+    return lam;
+}
+
 std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
 {
     if (!match(TokenType::FUNC))
     {
         expect(TokenType::FUNC, "expected func");
     }
+    // 特殊方法名（.construction/.destroy/.copy）：点号前缀
+    std::string specialPrefix;
+    if (match(TokenType::DOT))
+    {
+        specialPrefix = ".";
+    }
     Token name = expect(TokenType::IDENT, "expected function name");
+    if (!specialPrefix.empty())
+    {
+        name.text = specialPrefix + name.text;
+    }
 
     // 模板参数 <T: type> 或 <a: int>
     std::vector<std::string> typeParams;
@@ -300,12 +526,20 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
     }
 
     auto fnDecl = std::make_unique<FunctionDeclNode>(name.text, name.line, name.column);
+    fnDecl->typeParams = typeParams;
 
     expect(TokenType::LPAREN, "expected (");
     if (!check(TokenType::RPAREN))
     {
         do
         {
+            // 变参标记 ...（仅 extern 声明有意义）
+            if (check(TokenType::DOT) && peek(1).type == TokenType::DOT && peek(2).type == TokenType::DOT)
+            {
+                advance(); advance(); advance();
+                fnDecl->isVariadic = true;
+                break;
+            }
             bool isVar = true;
             if (match(TokenType::VAL)) isVar = false;
             else if (match(TokenType::VAR)) isVar = true;
@@ -316,18 +550,68 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
                 throw std::runtime_error("expected parameter modifier val/var");
             }
 
-            expect(TokenType::COLON, "expected : after parameter modifier");
-            auto type = parseTypeSuffix();
+            std::unique_ptr<TypeNode> paramType;
+            if (check(TokenType::ARROW))
+            {
+                // 指针参数：var -> var[: T] name
+                advance();
+                if (match(TokenType::VAR)) { /* rw */ }
+                else if (match(TokenType::VAL)) { /* const */ }
+                std::unique_ptr<TypeNode> inner;
+                if (match(TokenType::COLON))
+                {
+                    inner = parseTypeSuffix();
+                }
+                paramType = std::make_unique<TypeNode>(ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                                                       0, std::move(inner), false);
+            }
+            else
+            {
+                expect(TokenType::COLON, "expected : after parameter modifier");
+                paramType = parseTypeSuffix();
+            }
+
             Token pname = expect(TokenType::IDENT, "expected parameter name");
-            fnDecl->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(type),
+            fnDecl->params.push_back(std::make_unique<ParameterNode>(isVar, pname.text, std::move(paramType),
                                                                  pname.line, pname.column));
-        } while (match(TokenType::COMMA));    }
+        } while (match(TokenType::COMMA));
+    }
     expect(TokenType::RPAREN, "expected )");
 
-    // 返回类型
-    if (match(TokenType::ARROW))
+    // 返回类型（与变量声明统一）：
+    //   func foo() : T          返回 T（值，与 var: T a 的写法一致）
+    //   func foo() -> var T     返回 T 指针（箭头 + var/val 修饰，兼容 -> var: T）
+    //   func foo() -> T         旧语法：返回 T（值），保留兼容
+    if (match(TokenType::COLON))
     {
         fnDecl->returnType = parseType();
+    }
+    else if (match(TokenType::ARROW))
+    {
+        if (check(TokenType::VAR) || check(TokenType::VAL))
+        {
+            // 指针返回：-> var T
+            bool innerConst = false;
+            if (match(TokenType::VAR)) { /* rw */ }
+            else if (match(TokenType::VAL)) { innerConst = true; }
+
+            std::unique_ptr<TypeNode> inner;
+            if (match(TokenType::COLON))
+            {
+                inner = parseTypeSuffix();
+            }
+            else
+            {
+                inner = parsePrimitiveType();
+            }
+            fnDecl->returnType = std::make_unique<TypeNode>(
+                ASTNodeType::TYPE_POINTER, "", peek().line, peek().column,
+                0, std::move(inner), innerConst);
+        }
+        else
+        {
+            fnDecl->returnType = parseType(); // 旧语法兼容：值返回
+        }
     }
 
     if (match(TokenType::SEMICOLON))
@@ -346,13 +630,28 @@ std::unique_ptr<ASTNode> Parser::parseFunctionDecl()
 std::unique_ptr<ASTNode> Parser::parseStructDecl(bool allowAnonymous)
 {
     bool isAbstract = match(TokenType::ABSTRACT);
+    bool isUnion = false;
     if (check(TokenType::STRUCT))
     {
         advance();
     }
+    else if (check(TokenType::UNION))
+    {
+        advance();
+        isUnion = true;
+    }
     else if (!isAbstract)
     {
         expect(TokenType::STRUCT, "expected struct");
+    }
+
+    // 可选对齐 align(N)
+    int alignBytes = 0;
+    if (match(TokenType::ALIGN))
+    {
+        expect(TokenType::LPAREN, "expected ( after align");
+        alignBytes = std::stoi(expect(TokenType::NUMBER, "expected alignment value").text);
+        expect(TokenType::RPAREN, "expected ) after alignment value");
     }
 
     std::string structName;
@@ -370,11 +669,13 @@ std::unique_ptr<ASTNode> Parser::parseStructDecl(bool allowAnonymous)
         column = name.column;
     }
     auto structNode = std::make_unique<StructDeclNode>(structName, isAbstract, line, column);
+    structNode->isUnion = isUnion;
+    structNode->alignBytes = alignBytes;
 
     // 泛型 <T: type>
     if (match(TokenType::LT))
     {
-        parseTypeParams();
+        structNode->typeParams = parseTypeParams();
     }
 
     // 继承 : pub A, B
@@ -426,7 +727,16 @@ std::unique_ptr<ASTNode> Parser::parseImplDecl()
     expect(TokenType::LBRACE, "expected {");
     while (!check(TokenType::RBRACE) && !isAtEnd())
     {
-        implNode->members.push_back(parseStatement());
+        // 方法成员：pub/prt/pri 权限 + func
+        matchAny({TokenType::PUB, TokenType::PRT, TokenType::PRI});
+        if (check(TokenType::FUNC))
+        {
+            implNode->members.push_back(parseFunctionDecl());
+        }
+        else
+        {
+            implNode->members.push_back(parseStatement());
+        }
     }
     expect(TokenType::RBRACE, "expected }");
     return implNode;
@@ -434,12 +744,17 @@ std::unique_ptr<ASTNode> Parser::parseImplDecl()
 
 std::unique_ptr<ASTNode> Parser::parseStatement()
 {
-    if (check(TokenType::VAR) || check(TokenType::VAL)) return parseVarDecl();
+    if (check(TokenType::VAR) || check(TokenType::VAL) || check(TokenType::VOLATILE)) return parseVarDecl();
     if (check(TokenType::IF)) return parseIf();
     if (check(TokenType::WHILE)) return parseWhile();
     if (check(TokenType::FOR)) return parseFor();
-    if (check(TokenType::DO)) return parseDoWhile();
+    if (check(TokenType::GOTO)) return parseGoto();
+    if (check(TokenType::LABEL)) return parseLabel();
+    if (check(TokenType::BREAK)) return parseBreak();
+    if (check(TokenType::CONTINUE)) return parseContinue();
+    if (check(TokenType::SWITCH)) return parseSwitch();
     if (check(TokenType::RETURN)) return parseReturn();
+    if (check(TokenType::ASM)) return parseAsm();
     if (check(TokenType::LBRACE)) return parseBlock();
     if (check(TokenType::SEMICOLON)) { advance(); return nullptr; }
     return parseExprStmt();
@@ -451,15 +766,87 @@ std::unique_ptr<ASTNode> Parser::parseBlock()
     auto block = std::make_unique<BlockStmtNode>(start.line, start.column);
     while (!check(TokenType::RBRACE) && !isAtEnd())
     {
-        auto stmt = parseStatement();
-        if (stmt) block->statements.push_back(std::move(stmt));
+        try
+        {
+            auto stmt = parseStatement();
+            if (stmt) block->statements.push_back(std::move(stmt));
+        }
+        catch (const std::runtime_error& e)
+        {
+            // 错误恢复：记录并同步到语句结束，继续解析后续语句
+            errors.push_back({errorLine, errorColumn, e.what()});
+            while (!check(TokenType::SEMICOLON) && !check(TokenType::RBRACE) && !isAtEnd()) advance();
+            match(TokenType::SEMICOLON);
+        }
     }
     expect(TokenType::RBRACE, "expected }");
     return block;
 }
 
+std::unique_ptr<ASTNode> Parser::parseAsm()
+{
+    Token start = expect(TokenType::ASM, "expected asm");
+    expect(TokenType::LBRACE, "expected { after asm");
+
+    auto asmNode = std::make_unique<AsmNode>("", start.line, start.column);
+
+    // 模板字符串
+    Token tmpl = expect(TokenType::STRING, "expected asm template string");
+    asmNode->template_str = tmpl.text;
+
+    // 输出操作数 : "=r"(name), ...
+    if (match(TokenType::COLON))
+    {
+        if (!check(TokenType::COLON) && !check(TokenType::RBRACE))
+        {
+            do
+            {
+                Token constraint = expect(TokenType::STRING, "expected constraint string");
+                expect(TokenType::LPAREN, "expected ( after constraint");
+                Token name = expect(TokenType::IDENT, "expected operand name");
+                expect(TokenType::RPAREN, "expected )");
+                asmNode->outputs.push_back({constraint.text, name.text});
+            } while (match(TokenType::COMMA));
+        }
+
+        // 输入操作数 : "r"(name), ...
+        if (match(TokenType::COLON))
+        {
+            if (!check(TokenType::COLON) && !check(TokenType::RBRACE))
+            {
+                do
+                {
+                    Token constraint = expect(TokenType::STRING, "expected constraint string");
+                    expect(TokenType::LPAREN, "expected ( after constraint");
+                    Token name = expect(TokenType::IDENT, "expected operand name");
+                    expect(TokenType::RPAREN, "expected )");
+                    asmNode->inputs.push_back({constraint.text, name.text});
+                } while (match(TokenType::COMMA));
+            }
+
+            // clobber 列表 : "cc", ...
+            if (match(TokenType::COLON))
+            {
+                if (!check(TokenType::RBRACE))
+                {
+                    do
+                    {
+                        Token clob = expect(TokenType::STRING, "expected clobber string");
+                        asmNode->clobbers.push_back(clob.text);
+                    } while (match(TokenType::COMMA));
+                }
+            }
+        }
+    }
+
+    expect(TokenType::RBRACE, "expected } to close asm");
+    return asmNode;
+}
+
 std::unique_ptr<ASTNode> Parser::parseVarDecl()
 {
+    bool isVolatile = false;
+    if (match(TokenType::VOLATILE)) isVolatile = true;
     bool isVar;
     if (match(TokenType::VAL)) isVar = false;
     else if (match(TokenType::VAR)) isVar = true;
@@ -507,6 +894,13 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
         name = expect(TokenType::IDENT, "expected variable name").text;
     }
 
+    // 位域宽度: var: int x: 3;
+    int bitWidth = 0;
+    if (match(TokenType::COLON))
+    {
+        bitWidth = std::stoi(expect(TokenType::NUMBER, "expected bit width").text);
+    }
+
     // 引用声明: var ref@target
     if (match(TokenType::AT))
     {
@@ -533,7 +927,7 @@ std::unique_ptr<ASTNode> Parser::parseVarDecl()
 
     expect(TokenType::SEMICOLON, "expected ;");
     return std::make_unique<VariableDeclNode>(isVar, isMoved, name, std::move(type), std::move(init),
-                                              previous().line, previous().column);
+                                              previous().line, previous().column, bitWidth, isVolatile);
 }
 
 std::unique_ptr<ASTNode> Parser::parseIf()
@@ -602,16 +996,76 @@ std::unique_ptr<ASTNode> Parser::parseFor()
                                          std::move(body), start.line, start.column);
 }
 
-std::unique_ptr<ASTNode> Parser::parseDoWhile()
+std::unique_ptr<ASTNode> Parser::parseGoto()
 {
-    Token start = expect(TokenType::DO, "expected do");
-    auto body = parseStatement();
-    expect(TokenType::WHILE, "expected while");
-    expect(TokenType::LPAREN, "expected (");
+    Token start = expect(TokenType::GOTO, "expected goto");
+    Token name = expect(TokenType::IDENT, "expected label name");
+    expect(TokenType::SEMICOLON, "expected ; after goto");
+    return std::make_unique<GotoStmtNode>(name.text, start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseLabel()
+{
+    Token start = expect(TokenType::LABEL, "expected label");
+    Token name = expect(TokenType::IDENT, "expected label name");
+    expect(TokenType::SEMICOLON, "expected ; after label");
+    return std::make_unique<LabelStmtNode>(name.text, start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseBreak()
+{
+    Token start = expect(TokenType::BREAK, "expected break");
+    expect(TokenType::SEMICOLON, "expected ; after break");
+    return std::make_unique<BreakStmtNode>(start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseContinue()
+{
+    Token start = expect(TokenType::CONTINUE, "expected continue");
+    expect(TokenType::SEMICOLON, "expected ; after continue");
+    return std::make_unique<ContinueStmtNode>(start.line, start.column);
+}
+
+std::unique_ptr<ASTNode> Parser::parseSwitch()
+{
+    Token start = expect(TokenType::SWITCH, "expected switch");
+    expect(TokenType::LPAREN, "expected ( after switch");
     auto cond = parseExpression();
     expect(TokenType::RPAREN, "expected )");
-    expect(TokenType::SEMICOLON, "expected ;");
-    return std::make_unique<WhileStmtNode>(std::move(cond), std::move(body), start.line, start.column);
+    expect(TokenType::LBRACE, "expected {");
+    auto sw = std::make_unique<SwitchStmtNode>(std::move(cond), start.line, start.column);
+
+    while (!check(TokenType::RBRACE) && !isAtEnd())
+    {
+        SwitchCase c;
+        if (match(TokenType::CASE))
+        {
+            Token v = expect(TokenType::NUMBER, "expected case value");
+            c.value = std::stoll(v.text);
+        }
+        else if (match(TokenType::DEFAULT))
+        {
+            c.isDefault = true;
+        }
+        else
+        {
+            errorLine = peek().line;
+            errorColumn = peek().column;
+            throw std::runtime_error("expected case or default in switch");
+        }
+        expect(TokenType::COLON, "expected : after case/default");
+        auto body = std::make_unique<BlockStmtNode>(previous().line, previous().column);
+        while (!check(TokenType::CASE) && !check(TokenType::DEFAULT) &&
+               !check(TokenType::RBRACE) && !isAtEnd())
+        {
+            auto stmt = parseStatement();
+            if (stmt) body->statements.push_back(std::move(stmt));
+        }
+        c.body = std::move(body);
+        sw->cases.push_back(std::move(c));
+    }
+    expect(TokenType::RBRACE, "expected } after switch");
+    return sw;
 }
 
 std::unique_ptr<ASTNode> Parser::parseReturn()
@@ -678,7 +1132,7 @@ std::unique_ptr<ASTNode> Parser::parseAssignment()
     {
         if (match(op))
         {
-            auto value = parseAssignment();
+            auto value = parseExpression(); // 走 parseExpression 以支持 RHS 上的类型转换
             if (op == TokenType::ASSIGN)
             {
                 return std::make_unique<AssignmentNode>(std::move(left), std::move(value), op,
@@ -887,6 +1341,23 @@ std::unique_ptr<ASTNode> Parser::parseMultiplicative()
 
 std::unique_ptr<ASTNode> Parser::parseUnary()
 {
+    // 类型转换: TYPE as expr（作为操作数出现时，如 v - int as x）
+    if (check(TokenType::INT) || check(TokenType::I8) || check(TokenType::I16) ||
+        check(TokenType::I32) || check(TokenType::I64) || check(TokenType::U8) ||
+        check(TokenType::U16) || check(TokenType::U32) || check(TokenType::U64) ||
+        check(TokenType::UINT) || check(TokenType::F32) || check(TokenType::F64) ||
+        check(TokenType::CHAR) || check(TokenType::STRING_TYPE) || check(TokenType::BOOL))
+    {
+        if (peek(1).type == TokenType::AS)
+        {
+            std::string targetType = advance().text;
+            int line = previous().line;
+            int column = previous().column;
+            advance(); // 消费 as
+            auto value = parseExpression();
+            return std::make_unique<CastNode>(targetType, std::move(value), line, column);
+        }
+    }
     if (match(TokenType::NOT))
     {
         auto operand = parseUnary();
@@ -938,7 +1409,50 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
             std::string full = expr->type == ASTNodeType::VARIABLE_REF
                 ? dynamic_cast<VariableRefNode*>(expr.get())->name + "." + member.text
                 : member.text;
+            // 泛型成员调用 s.foo<T>(...)：member 后紧跟 < 时解析泛型实参拼接
+            if (check(TokenType::LT))
+            {
+                size_t savePos = pos;
+                bool savedGT = genericPendingGT;
+                try
+                {
+                    advance(); // <
+                    std::string gname = full + "<";
+                    do
+                    {
+                        auto argTy = parseTypeSuffix();
+                        gname += typeNodeText(argTy.get());
+                        if (check(TokenType::COMMA)) gname += ",";
+                    } while (match(TokenType::COMMA));
+                    if (genericPendingGT) genericPendingGT = false;
+                    else if (match(TokenType::GT)) { /* 已消费 */ }
+                    else if (match(TokenType::SHR)) genericPendingGT = true;
+                    else throw std::runtime_error("generic call");
+                    gname += ">";
+                    if (check(TokenType::LPAREN))
+                    {
+                        full = gname;
+                    }
+                    else
+                    {
+                        pos = savePos;
+                        genericPendingGT = savedGT;
+                    }
+                }
+                catch (...)
+                {
+                    pos = savePos;
+                    genericPendingGT = savedGT;
+                }
+            }
             expr = std::make_unique<VariableRefNode>(full, member.line, member.column);
+        }
+        else if (match(TokenType::LBRACKET))
+        {
+            // 数组下标 buf[i]
+            auto index = parseExpression();
+            expect(TokenType::RBRACKET, "expected ]");
+            expr = std::make_unique<IndexNode>(std::move(expr), std::move(index), index->line, index->column);
         }
         else if (match(TokenType::LPAREN))
         {
@@ -966,6 +1480,11 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
         {
             expr = std::make_unique<UnaryOpNode>(UnaryOpType::DEC, std::move(expr));
         }
+        else if (match(TokenType::QUESTION))
+        {
+            // ? 错误传播：expr?
+            expr = std::make_unique<TryExprNode>(std::move(expr), previous().line, previous().column);
+        }
         else break;
     }
     return expr;
@@ -973,6 +1492,21 @@ std::unique_ptr<ASTNode> Parser::parsePostfix()
 
 std::unique_ptr<ASTNode> Parser::parsePrimary()
 {
+    if (check(TokenType::LAMBDA)) return parseLambda();
+    if (match(TokenType::LBRACE))
+    {
+        // 嵌套初始化列表 {{1,2},3} —— 与 parseInitList 结构一致
+        auto block = std::make_unique<BlockStmtNode>(previous().line, previous().column);
+        if (!check(TokenType::RBRACE))
+        {
+            do
+            {
+                block->statements.push_back(parseExpression());
+            } while (match(TokenType::COMMA));
+        }
+        expect(TokenType::RBRACE, "expected }");
+        return block;
+    }
     if (match(TokenType::NUMBER))
     {
         std::string text = previous().text;
@@ -1039,9 +1573,73 @@ std::unique_ptr<ASTNode> Parser::parsePrimary()
     {
         return std::make_unique<LiteralBoolNode>(false, previous().line, previous().column);
     }
-    if (match(TokenType::IDENT))
+    if (match(TokenType::NULL_LIT))
     {
-        return std::make_unique<VariableRefNode>(previous().text, previous().line, previous().column);
+        return std::make_unique<NullNode>(previous().line, previous().column);
+    }
+    if (match(TokenType::SIZEOF))
+    {
+        expect(TokenType::LPAREN, "expected ( after sizeof");
+        auto ty = parseType();
+        expect(TokenType::RPAREN, "expected ) to close sizeof");
+        return std::make_unique<SizeofExprNode>(std::move(ty), previous().line, previous().column);
+    }
+    // 标识符（含类型关键字如 string.len 的 string）
+    if (check(TokenType::IDENT) || check(TokenType::INT) || check(TokenType::CHAR) ||
+        check(TokenType::STRING_TYPE) || check(TokenType::BOOL) ||
+        check(TokenType::I8) || check(TokenType::I16) || check(TokenType::I32) || check(TokenType::I64) ||
+        check(TokenType::U8) || check(TokenType::U16) || check(TokenType::U32) || check(TokenType::U64) ||
+        check(TokenType::UINT) || check(TokenType::F32) || check(TokenType::F64))
+    {
+        Token idTok = advance();
+        std::string name = idTok.text;
+        // 泛型函数调用 foo<T1,T2>(...)：IDENT 后紧跟 < 时尝试解析泛型实参（失败则回退为普通标识符）
+        if (check(TokenType::LT))
+        {
+            size_t savePos = pos;
+            bool savedGT = genericPendingGT;
+            try
+            {
+                advance(); // <
+                std::string gname = name + "<";
+                do
+                {
+                    auto argTy = parseTypeSuffix();
+                    gname += typeNodeText(argTy.get());
+                    if (check(TokenType::COMMA)) gname += ",";
+                } while (match(TokenType::COMMA));
+                if (genericPendingGT)
+                {
+                    genericPendingGT = false;
+                }
+                else if (match(TokenType::GT)) { /* 已消费 */ }
+                else if (match(TokenType::SHR))
+                {
+                    genericPendingGT = true;
+                }
+                else
+                {
+                    throw std::runtime_error("generic call");
+                }
+                gname += ">";
+                // 仅当后面是 ( 才当作泛型调用，否则回退（可能是 a < b 比较）
+                if (check(TokenType::LPAREN))
+                {
+                    name = gname;
+                }
+                else
+                {
+                    pos = savePos;
+                    genericPendingGT = savedGT;
+                }
+            }
+            catch (...)
+            {
+                pos = savePos;
+                genericPendingGT = savedGT;
+            }
+        }
+        return std::make_unique<VariableRefNode>(name, previous().line, previous().column);
     }
     if (match(TokenType::THIS))
     {

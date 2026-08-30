@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include <memory>
 #include "AST.h"
 #include "SymbolTable.h"
@@ -37,6 +38,47 @@ private:
     std::vector<SemaWarning> warnings;
     std::string currentReturnType;      // 当前函数返回类型（空=无返回）
     std::string currentFunctionName;    // 当前函数名
+    std::string currentPackage;         // 当前分析的函数所属包（可见性检查用）
+    std::set<std::string> importedModules;  // 已导入的标准库模块（如 "std.thread"）
+    std::unordered_map<std::string, std::string> arrayElementTypes;    // 数组变量 → 元素类型
+    std::unordered_map<std::string, std::string> pointerElementTypes;  // 指针变量/参数 → 指向类型
+
+    // 结构体注册表：名字 → 成员（字段名 + 类型名）
+    struct StructInfo
+    {
+        std::vector<std::pair<std::string, std::string>> fields;
+        std::unordered_map<std::string, std::string> fieldElementTypes; // 数组成员 → 元素类型
+        std::unordered_map<std::string, std::string> fieldPointerTypes; // 指针成员 → 指向类型
+        // 方法：方法名 → {返回类型, 参数类型}
+        std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>> methods;
+        bool hasConstruction = false;   // .construction()
+        bool hasDestruction = false;    // .destroy()
+    };
+    std::unordered_map<std::string, StructInfo> structRegistry;
+    std::unordered_map<std::string, StructDeclNode*> genericTemplates;  // 泛型模板（名字 → 原声明）
+    std::unordered_map<std::string, FunctionDeclNode*> genericFuncTemplates;  // 泛型函数模板
+    std::set<std::string> genericFuncInstances;                          // 已实例化泛型函数（mangled 名）
+    ProgramNode* currentProgram = nullptr;                              // 实例化注入用
+    void instantiateGeneric(const std::string& mangledName);            // 泛型实例化（克隆+替换+注入）
+    void instantiateGenericFunc(const std::string& tmplName, const std::string& callName);  // 泛型函数实例化
+    bool tryResolveGenericType(const std::string& name);                // 名字含 < 时尝试实例化
+    std::unique_ptr<TypeNode> substituteType(TypeNode* t,
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
+    std::unique_ptr<BlockStmtNode> cloneBlock(BlockStmtNode* b,   // 深拷贝语句块（泛型函数实例化用）
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
+    std::unique_ptr<ASTNode> cloneStmt(ASTNode* n,
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
+    std::unique_ptr<ASTNode> cloneExpr(ASTNode* n,
+        const std::vector<std::string>& params, const std::vector<std::string>& args);
+    std::set<std::string> functionLabels;   // 当前函数的 label 集合
+    std::string currentStruct;              // 当前方法所属结构体（空=自由函数）
+    std::set<std::string> duplicateLabels;  // 重复 label 检测
+    int loopDepth = 0;                      // 当前循环嵌套深度（break/continue 校验）
+    std::set<std::string> enumTypes;        // 已注册的 enum 类型名（当作 int 处理）
+    int lambdaCounter = 0;                  // lambda 函数命名计数
+    LambdaExprNode* currentLambda = nullptr; // 正在分析捕获的 lambda（检测自由变量）
+    std::set<std::string>* lambdaOwnVars = nullptr;  // lambda 自身的参数/局部变量集合
+    std::set<std::string> currentLocals;    // 当前函数内声明的局部变量（借用检查）
 
 public:
     bool analyze(std::unique_ptr<ProgramNode>& program);
@@ -52,6 +94,7 @@ private:
     void visitDecl(ASTNode* node);
     void visitFunctionDecl(FunctionDeclNode* node);
     void visitStructDecl(StructDeclNode* node);
+    void visitEnumDecl(EnumDeclNode* node);
     void visitImplDecl(ImplDeclNode* node);
 
     // 语句检查
@@ -61,6 +104,22 @@ private:
     void visitIf(IfStmtNode* node);
     void visitWhile(WhileStmtNode* node);
     void visitFor(ForStmtNode* node);
+    std::string visitLambda(LambdaExprNode* node);
+    std::string visitTry(TryExprNode* node);
+    std::unordered_map<std::string, std::string> closureReturnTypes;   // 闭包变量名 → 返回类型
+    void visitGoto(GotoStmtNode* node);
+    void visitLabel(LabelStmtNode* node);
+    void visitBreak(BreakStmtNode* node);
+    void visitContinue(ContinueStmtNode* node);
+    std::string structWithOperator(const std::string& leftType, const std::string& rightType,
+                                   const std::string& opName) const;
+    // 函数重载
+    void resolveOverloads(std::vector<std::unique_ptr<ASTNode>>& decls);
+    std::string functionSignature(FunctionDeclNode* fn);
+    FunctionDeclNode* resolveOverload(const std::string& rawName,
+                                      const std::vector<std::string>& argTypes);
+    std::unordered_map<std::string, std::vector<FunctionDeclNode*>> overloadCandidates;
+    void visitSwitch(SwitchStmtNode* node);
     void visitReturn(ReturnStmtNode* node);
     void visitExprStmt(ExpressionStmtNode* node);
 
@@ -71,15 +130,20 @@ private:
     std::string visitComparison(ComparisonOpNode* node);
     std::string visitLogical(LogicalOpNode* node);
     std::string visitCall(FunctionCallNode* node);
+    std::string visitThreadCall(FunctionCallNode* node);   // std.thread 内置 API 校验
+    std::string visitAtomicCall(FunctionCallNode* node);   // std.atomic 内置 API 校验
     std::string visitLiteralInt(LiteralIntNode* node);
     std::string visitLiteralFloat(LiteralFloatNode* node);
     std::string visitLiteralString(LiteralStringNode* node);
     std::string visitLiteralBool(LiteralBoolNode* node);
     std::string visitVariableRef(VariableRefNode* node);
+    std::string visitIndex(IndexNode* node);    // 数组下标 buf[i]
     std::string visitAssignment(AssignmentNode* node);
+    void collectLabels(ASTNode* node);      // 预扫描函数体收集 label
 
     // 类型工具
     std::string typeNodeToName(TypeNode* type);
+    std::string rootVarName(ASTNode* node);     // 取地址表达式的根变量名（借用检查）
     bool isBuiltinType(const std::string& type) const;
     bool isNumericType(const std::string& type) const;
     bool isCompatible(const std::string& from, const std::string& to) const;

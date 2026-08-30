@@ -1,21 +1,64 @@
+# PLang 语言文档
+
+> **实现状态**：本文为语言设计文档。已实现：指针/数组、结构体/联合/位域/对齐、泛型结构体与泛型函数、sizeof、RAII（construction/destroy）、
+> 继承与 abstract 基础、move、extern FFI、变参、goto/switch、原子操作、多线程、堆内存、标准库（io/thread/mem/atomic/option/result/vector/string/sqlite/fs/buffer/map）。
+> `&&`/`||` 短路求值、`break`/`continue`、`enum` 枚举、函数重载、运算符重载（opAdd/opEq 等）、闭包 `lambda`（按值捕获）。
+> 设计中（尚未实现）：`@` 引用扩展、`a...b` 范围循环、模板函数自动生成、`?` 错误传播、完整借用规则。
+> 编译器：LLVM 优化（-O0~-O3）、DWARF 调试信息、错误恢复、独立编译单元、LSP（悬停/补全/跳转/重命名）。
+> 标准库通过 `import std.xxx` 独立编译为 `.o` 并与用户程序链接，见 `stdlib.md`。
+
 # 包和模块
 ## 包
 ### 包的声明
-一个目录为一个包, 目录内所有`.plang`源文件同属一个包.
-其中, 目录名称为包名.
+一个目录为一个包, 目录内所有 `.plang` 源文件同属一个包.
+每个源文件需在顶部声明其所属包:
+```plang
+package foo;
+```
+`impl` 仅在同一包内生效, 跨包无法扩展结构体的实现.
+
+## 项目构建管理（pLangLists.json）
+类似 CMakeLists.txt 的项目清单：目录内放 `pLangLists.json` 声明构建配置，
+`plc build/run/clean/init` 驱动构建。
+
+```json
+{
+  "name": "demo",              // 项目名（默认输出文件名）
+  "version": "0.1.0",
+  "kind": "executable",        // executable | library（产出 .a）
+  "entry": "demo.plang",       // 入口源文件（executable）
+  "sources": ["util.plang"],   // 额外源文件；留空自动收集目录内 *.plang
+  "output": "demo",            // 输出文件名（默认 name）
+  "optimization": 2,           // -O0~-O3
+  "link": { "libraries": ["sqlite3"] },  // 额外链接库（-l）
+  "import": []                 // 第三方 import 根（后续启用）
+}
+```
+
+命令：
+```
+plc init <name>     # 生成 pLangLists.json + 入口文件模板
+plc build [dir]     # 按清单编译并链接（可执行或静态库）
+plc run [dir] [args]  # 构建并运行
+plc clean [dir]     # 清理构建产物
+```
+
+`import` 字段预留第三方包搜索根，待包管理功能启用。
 
 ## 模块
 ### 模块的声明
-一个`.plang`源文件为一个模块, 文件名为包名.
-特别的, 可以使用`mod`声明子模块.
+一个 `.plang` 源文件为一个模块, 文件名为包名.
+特别的, 可以使用 `mod` 声明子模块.
 
 ### 模块的编写
 语法如下文, 所有符号仅模块内可访问, 显式 `pub` 修饰后对外公开.
 
-### 模块的引用
-使用 `import` 引入其他模块的公开符号:
+### 包和模块的引用
+使用 `import` 引入其他包/模块的符号:
 ```plang
-import std.vector;
+import std.vector;          // 标准库
+import repo;                // 第三方包：别名（pvp 安装时登记）
+import github.com/user/repo; // 第三方包：完整仓库地址
 using vec = vector.vec<i32>;
 ```
 禁止循环依赖: A import B 且 B import A 时, 编译报错.
@@ -27,6 +70,30 @@ plang自带标准模块, 包含大量泛型代码, 以std.开头.
 在macos上未定.
 如需使用需`cp /path/to/std ./std`, 避免在非std依赖中引入std.
 需要在操作系统平台上运行的标准模块位于`/path/to/std/os`, 即`std.os`.
+
+### 第三方包（pvp）
+
+第三方包由 [pvp](https://github.com/) 管理，安装到用户级包根（macOS
+`~/Library/Application Support/pLang/0.x/packages/`，Linux `~/.local/share/...`，
+Windows `%LOCALAPPDATA%\...`，`PLANG_PVP` 可覆盖）。
+
+- **安装必须用完整仓库地址**：`pvp install github.com/user/repo`（别名不能用于安装）
+- **import 用别名**：`import repo;`，编译器查 `<包根>/installed.json`（别名→仓库地址）解析
+- 包作者在自己仓库写 `pLangLists.json` 清单：`repo`（仓库地址）、`alias`（别名）、`name`/`version`/`author`
+- 包内 `.plang` 用别名声明：`package repo;`
+
+```plang
+package repo;                  // 别名（与清单 alias 一致）
+pub func shout(var -> var: char s) -> var: ptr { ... }
+```
+
+```plang
+import repo;
+func main() : int {
+    io.println(repo.shout("hi"));   // 调用用别名
+    return 0;
+}
+```
 
 # 类型系统
 ## 变量修饰
@@ -54,6 +121,27 @@ var: int myValue = 1;
 val: string userName = "plang";
 ```
 
+### 类型转换
+类型转换分为自动转换与强制转换.
+自动转换发生在声明/赋值时显式声明了目标类型, 编译器按目标类型自动转换:
+```plang
+var: int a = b;
+```
+强制转换使用`as`关键字, 显式转换:
+```plang
+var: int a = int as b;
+```
+无类型标注且类型不符时编译报错, 不会自动推导错位类型.
+取变量地址以转换为指针, 使用`&`操作符:
+```plang
+var: T a;
+var -> var: T p = &a;
+```
+数组可转换为指向其首元素的指针:
+```plang
+var: T[1] a;
+var -> var: T p = a;
+```
 ### 变量初始化
 变量通过`=`赋值初始化, 或通过`{...}`调用构造函数初始化:
 ```plang
@@ -155,7 +243,7 @@ using t = struct {
     pub val: T a;
     pub func .conv();
     pub func .init();
-    pub func getData() -> T;
+    pub func getData() : T;
 };
 ```
 其内部函数可在直接在内部实现, 也可在同包内用`impl`实现:
@@ -176,7 +264,7 @@ impl t {
 在结构体/接口的成员函数中, `this`表示当前实例的引用:
 ```plang
 using Circle = struct : pub Shape {
-    pub func area() -> f64 {
+    pub func area() : f64 {
         return 3.14 * this.r * this.r;
     }
 };
@@ -203,7 +291,7 @@ func foo1[T: type](val: T a) : T {
     return a;
 }
 
-func foo2[val a] : typeof(a) {
+func foo2(val a) : typeof(a) {
     return a;
 }
 ```
@@ -282,19 +370,234 @@ using Circle = struct : pub Shape {
 拷贝/移动/构造/析构链同样遵循该顺序.
 覆盖父类成员时, `prt`(子类可写)语义在继承下依旧成立.
 
+## 已实现的附加语言特性
+
+以下特性已实现并有测试覆盖，补充说明（详情见 `stdlib.md`）：
+
+### 泛型结构体实例化
+`struct<T: type>` 定义模板，`Name<Arg1, Arg2>` 使用（支持多参数、嵌套、泛型方法）：
+```plang
+using Box = struct<T: type> {
+    pub val: T value;
+};
+var: Box<int> b = {42};          // 实例化 Box<int>
+var: Box<Box<int>> nb = {{7}};   // 嵌套实例化
+```
+
+### 泛型函数
+`func foo<T: type>(...)` 定义，调用时 `foo<int>(args)` 实例化（支持多参数、与泛型结构体组合、跨包调用）：
+```plang
+func maxOf<T: type>(val: T a, val: T b) : T {
+    if (a > b) { return a; }
+    return b;
+}
+var: int m = maxOf<int>(3, 7);       // 7
+var: f64 mf = maxOf<f64>(1.5, 2.5);  // 2.5
+```
+泛型结构体方法暂不克隆，标准库以自由泛型函数形式提供（如 `vector.push<int>(&v, x)`）。
+
+### sizeof
+`sizeof(T)` 返回类型字节数（编译期常量）：
+```plang
+sizeof(i8)       // 1
+sizeof(int)      // 4
+sizeof(i64)      // 8
+sizeof(Box<int>) // 4
+```
+
+### break / continue
+`while`/`for` 循环内使用；`break` 跳出当前循环，`continue` 跳到更新/条件处。
+```plang
+var: int sum = 0;
+var: int i = 0;
+while (i < 10) {
+    i = i + 1;
+    if (i % 2 == 0) continue;   // 跳过偶数
+    if (i > 7) break;           // i=8 停止
+    sum = sum + i;              // 1+3+5+7 = 16
+}
+```
+
+### && / || 短路求值
+`a && b` 在 `a` 为假时不求值 `b`，`a || b` 在 `a` 为真时不求值 `b`。可安全写出
+`p != null && *p > 0` 这类依赖短路的守卫代码。
+
+### enum 枚举
+C 风格整型常量类型，变体自动递增、可显式赋值、可裸用或限定访问：
+```plang
+enum Color { RED, GREEN, BLUE = 10, CYAN }
+var: Color c = GREEN;              // 1
+var: bool r = (c == Color.RED);    // false
+switch (c) { case 1: ... }         // 按整数值
+```
+枚举类型按 `int` 处理（可与整数运算/比较/switch）。
+
+### 函数重载
+同名函数按参数类型区分，调用时按实参类型匹配（精确优先，其次隐式转换）：
+```plang
+func printVal(val: int n) { ... }
+func printVal(val: f64 f) { ... }
+func printVal(val: string s) { ... }
+printVal(42);     // int 版本
+printVal(3.14);   // f64 版本
+printVal("hi");   // string 版本
+```
+
+### 运算符重载
+结构体定义 `opAdd`/`opSub`/`opMul`/`opDiv`/`opMod`/`opEq`/`opNe`/`opLt`/`opLe`/`opGt`/`opGe`
+方法后，`a + b`、`c == d` 自动派发到对应方法（操作数传地址）：
+```plang
+using Vec2 = struct {
+    pub val: f64 x;
+    pub val: f64 y;
+    pub func opAdd(var -> var: Vec2 other) : Vec2 {
+        var: Vec2 r = {this.x + other.x, this.y + other.y};
+        return r;
+    }
+    pub func opEq(var -> var: Vec2 other) : bool {
+        return this.x == other.x && this.y == other.y;
+    }
+};
+var: Vec2 c = a + b;   // 调用 a.opAdd(&b)
+if (c == d) { ... }    // 调用 c.opEq(&d)
+```
+
+### 闭包 lambda
+`lambda (val: int a) : int { ... }` 生成闭包值（内置 `Closure` 类型 = {函数指针, 捕获环境}）。
+捕获的外层变量**按值复制**进堆上环境；闭包可赋值给变量、作参数传递、嵌套调用：
+```plang
+var: int offset = 10;
+var: Closure addOff = lambda (val: int x) : int { return x + offset; };
+var: int r = addOff(5);   // 15
+
+func applyTwice(var: Closure f, val: int n) : int { return f(f(n)); }
+var: int t = applyTwice(addOff, 1);   // (1+10)+10 = 21
+```
+限制：捕获按值（闭包内修改不影响原变量）；闭包作为参数传递时返回类型可任意
+（int/f64 等均已支持）；捕获环境为堆内存，需由调用方管理释放。
+
+### RAII：construction / destroy
+变量声明后自动调用 `.construction`，作用域退出时逆序调用 `.destroy`：
+```plang
+using File = struct {
+    pub func .construction() : int { io.println("open"); return 0; }
+    pub func .destroy() : int { io.println("close"); return 0; }
+};
+func main() : int {
+    var: File f;   // 自动 construction
+    return 0;      // 块结束自动 destroy
+}
+```
+已知限制：`return`/`goto` 提前退出时不执行析构。
+
+### goto / label / switch
+```plang
+label start;             // 定义标签
+goto start;              // 跳转（支持前向跳转）
+switch (n) {             // 整数 switch
+    case 1: io.println("one");
+    case 2: io.println("two");
+    default: io.println("other");
+}
+```
+
+### 借用检查（悬垂返回检测）
+返回局部变量地址在编译期报错（D5 基础）：
+```plang
+func bad() -> var: ptr {
+    var: i64 x = 42;
+    return &x;   // 编译错误：cannot return reference to local variable 'x'
+}
+```
+参数指针、堆内存指针（`mem.malloc`）可正常返回。完整借用规则（可变/不可变冲突）尚未实现。
+
+### extern 全局数据
+`extern var` 声明外部全局变量（FFI）：
+```plang
+extern var stdin : ptr;
+```
+
 ## 标准库类型
-- `std.vector.vec`: 可变长数组, 有运行环境下可使用堆内存, 否则abort.
-- `std.string.str`: 可变ASCII字符串, 有运行环境下可使用堆内存, 否则强制使用栈.
-- `std.string.wstr`: 可变UTF-32字符串，有运行环境下可时候堆内存, 否则强制使用栈.
+- `std.string.str`: 可变ASCII字符串（**设计中，尚未实现**）.
+- `std.string.wstr`: 可变UTF-32字符串（**设计中，尚未实现**）.
+
+已实现的标准库（位于 `std/`，通过 `import std.xxx` 独立编译链接）：
+
+| 库 | 功能 | 详述 |
+|----|------|------|
+| `std.io` | 标准输入输出 | 见下文 `# 标准输入输出` |
+| `std.thread` | 多线程 | 见下文 `# 多线程` |
+| `std.mem` | 堆内存 | `mem.malloc/free/memcpy/memset/memcmp`，extern 直通 libc |
+| `std.atomic` | 原子操作 | `atomic.load/store/add/sub/exchange/cas` + 内存序参数 |
+| `std.option` | null 安全 | `Option<T>` 泛型结构体：`{true, v}` 有值 / `{false, 0}` 无值 |
+| `std.result` | 错误处理 | `Result<T, E>` 泛型结构体：`{true, v, 0}` 成功 / `{false, 0, e}` 失败 |
+| `std.vector` | 动态数组 | `Vec<T>` 泛型容器：`vector.new/push/get/len/pop/destroy`，自动扩容 |
+| `std.string` | 字符串操作 | `string.len/cat/dup/eq/cmp`（char\* 字符串） |
+| `std.sqlite` | 数据库 | SQLite 绑定：`sqlite.open/close/exec/query` + 按列取值，自动链接 -lsqlite3 |
+
+# 多线程 (std.thread)
+`std.thread` 是**真正的源码库**，位于 `std/thread/thread.plang`：`import std.thread;` 后编译器将该包独立编译为 `.o` 并与用户程序链接。
+其中 `join` / `yield` / `lock` / `unlock` / `destroy` 是库内用源码实现的函数（内部通过 `extern` 调用 pthread），
+`spawn` / `sleep` / `mutex.create` 因需要蹦床与全局锁池而保留为编译器内置。
+
+## 线程
+使用 `thread.spawn` 启动一个新线程运行一个**无参函数**, 返回线程句柄（`var -> var: ptr`）;
+`thread.join` 阻塞等待该线程结束:
+```plang
+import std.thread;
+
+func worker() : int {
+    // 线程体
+    return 0;
+}
+
+func main() : int {
+    var -> var: ptr t1 = thread.spawn(worker);
+    var -> var: ptr t2 = thread.spawn(worker);
+    thread.join(t1);
+    thread.join(t2);
+    return 0;
+}
+```
+- 线程入口必须是无参函数, 返回值被忽略.
+- `join` 前线程与主线程并行执行; 程序退出前应 `join` 所有已 spawn 的线程.
+
+## 互斥锁
+互斥锁由编译器维护一个全局锁池 (上限 64 把), `thread.mutex.create()` 分配并初始化一把锁,
+返回其地址（`var -> var: ptr`）; `lock` / `unlock` / `destroy` 加锁 / 解锁 / 销毁:
+```plang
+var -> var: ptr m = thread.mutex.create();
+thread.lock(m);
+// 临界区
+thread.unlock(m);
+thread.destroy(m);
+```
+
+## 其他
+- `thread.sleep(ms)`: 当前线程休眠指定毫秒数（编译器内置）.
+- `thread.yield()`: 当前线程主动让出 CPU（源码库实现）.
+
+# 外部函数接口 (extern FFI)
+使用 `extern func` 声明 C 函数, 编译器映射为 LLVM 外部声明 (declare), 链接期解析符号:
+```plang
+extern func sched_yield() : int;
+extern func pthread_join(var -> var: ptr handle, var -> var: ptr result) : int;
+```
+- 参数类型使用指针类型 `var -> var: ptr`（通用指针）, 空指针字面量写作 `null`.
+- extern 声明属于声明所在包, 遵循包可见性规则（跨包调用需 `pub`）.
 
 # 函数
 ## 函数的定义
-以`func`关键字定义
+以`func`关键字定义, 返回值书写方式与变量声明统一:
+- `func foo() : T` 返回类型`T`（与 `var: T a` 一致）.
+- `func foo() -> var T` 返回`T`指针（与 `var -> var: T p` 的箭头写法一致, 也可写 `-> var: T`）.
 ```plang
 func foo() : T {
 }
+func bar() -> var T {
+}
 ```
-其中`T`为返回类型. 无返回省略.
+其中`T`为返回类型. 无返回省略. 旧写法 `-> T` 仍兼容（值返回）.
 函数参数使用`val`/`var`修饰, 对于`移动构造/赋值函数`可用`moved`, 格式与变量声明一致, 多个参数以逗号分隔:
 ```plang
 func foo(val: int a, var: string b) : int {
@@ -424,3 +727,237 @@ for (var i = a[1...5 step 1]) {
 }
 ```
 默认步长为1.
+
+# 标准输入输出 (std.io)
+`std.io` 是真正的源码库，位于 `std/io/io.plang`：`import std.io;` 后编译器将该包独立编译为 `.o` 并与用户程序链接。
+数字→字符串的格式化在源码内实现（不依赖 libc 的 printf 舍入，跨平台位级一致）。
+
+## 输出
+- `io.print(s)`: 输出字符串（不换行）, `s` 为字符串或字符缓冲指针.
+- `io.println(s)`: 输出字符串并换行.
+- `io.printChar(c)`: 输出单个字符.
+- `io.printInt(n)`: 输出整数.
+- `io.printFloat(f)`: 输出浮点数（保留 6 位小数）.
+- `io.error(s)`: 输出到标准错误.
+- `io.flush()`: 冲刷输出缓冲.
+
+## 输入
+- `io.readChar()`: 读取一个字符（EOF 返回 -1）.
+- `io.readInt()`: 读取一个整数.
+- `io.readLine(buf, size)`: 读取一行到缓冲区（含换行）.
+```plang
+import std.io;
+
+func main() : int {
+    io.println("请输入一个整数:");
+    var: int n = io.readInt();
+    io.print("你输入了: ");
+    io.printInt(n);
+    io.println("");
+    return 0;
+}
+```
+
+# 堆内存 (std.mem)
+
+`std.mem` extern 直通 libc 分配器，配合指针算术使用：
+
+- `mem.malloc(n)`: 分配 `n` 字节，返回指针（失败返回 `null`）.
+- `mem.free(p)`: 释放内存.
+- `mem.memcpy(dst, src, n)`: 复制 `n` 字节.
+- `mem.memset(dst, value, n)`: 将 `n` 字节设为 `value`.
+- `mem.memcmp(a, b, n)`: 比较 `n` 字节，返回 0/负数/正数.
+
+```plang
+import std.io;
+import std.mem;
+
+func main() : int {
+    var -> var: int p = mem.malloc(16);   // 4 个 int
+    if (p == null) return 1;
+    p[0] = 10;
+    p[1] = 20;
+    io.printInt(p[0] + p[1]);   // 30
+    io.println("");
+    mem.free(p);
+    return 0;
+}
+```
+
+> `n` 为字节数；按元素访问需自行乘元素大小（`int` 为 4 字节）。
+
+# 原子操作与 volatile
+
+## 原子操作 (std.atomic)
+
+`std.atomic` 是编译器内置（LLVM atomicrmw/cmpxchg），用于多线程共享计数器/标志：
+
+- `atomic.load(p)`: 原子读取.
+- `atomic.store(p, v)`: 原子写入.
+- `atomic.add(p, v)` / `atomic.sub(p, v)`: 原子加/减，**返回旧值**.
+- `atomic.exchange(p, v)`: 原子交换，返回旧值.
+- `atomic.cas(p, expect, desired)`: 比较交换，返回是否成功（bool）.
+
+内存序参数（可选，最后一个）：`0`=relaxed、`1`=acquire、`2`=release、`3`=acq_rel、`4`=seq_cst（默认）。
+`p` 必须是指向整数类型的指针。
+
+```plang
+import std.atomic;
+var: int counter = 0;
+var -> var: int p = &counter;
+var: int old = atomic.add(p, 1);   // 原子自增，返回旧值
+var: bool ok = atomic.cas(p, 1, 2);
+```
+
+## volatile 变量
+
+`volatile var: int flag = 0;` —— 对该变量的读写不走缓存优化（LLVM volatile load/store），用于与外部/中断交互。
+
+```plang
+volatile var: int flag = 0;
+flag = 1;          // volatile store
+var: int v = flag; // volatile load
+```
+
+# 可选值与错误处理 (std.option / std.result)
+
+库级安全基础，用泛型结构体实现（完整编译期检查需类型系统后续支持）。
+
+## std.option
+
+`Option<T>` 表示"可能有值，也可能没有"：
+
+- `isSome`: 是否包含值（bool）.
+- `value`: 值（`isSome=false` 时无效）.
+
+```plang
+import std.option;
+var: Option<int> some = {true, 42};
+var: Option<int> none = {false, 0};
+if (some.isSome) { io.printInt(some.value); }   // 42
+if (!none.isSome) { io.println("none"); }
+```
+
+## std.result
+
+`Result<T, E>` 表示"成功携带值，或失败携带错误码"：
+
+- `isOk`: 是否成功（bool）.
+- `value`: 成功值（`isOk=false` 时无效）.
+- `error`: 错误码（`isOk=true` 时无效）.
+
+```plang
+import std.result;
+func divide(a: int, b: int) -> Result<int, int> {
+    if (b == 0) { return {false, 0, 1}; }   // Err(1)
+    return {true, a / b, 0};                // Ok(a/b)
+}
+var: Result<int, int> r = divide(10, 2);   // r.isOk=true, r.value=5
+```
+
+> `?` 传播运算符尚未实现；错误处理目前为显式分支检查.
+
+# 动态数组 (std.vector)
+
+`Vec<T>` 是泛型结构体（堆内存），可变长数组，自动扩容：
+
+- `vector.new<T>(cap)`: 创建空 Vec（预留 `cap` 容量），返回 `Vec<T>`.
+- `vector.push<T>(&v, item)`: 末尾追加（容量不足自动翻倍）.
+- `vector.get<T>(&v, i)`: 取第 `i` 个元素（不做越界检查）.
+- `vector.len<T>(&v)`: 元素个数.
+- `vector.pop<T>(&v)`: 弹出并返回末尾元素.
+- `vector.destroy<T>(&v)`: 释放堆内存.
+
+```plang
+import std.vector;
+var: Vec<int> v = vector.new<int>(2);
+vector.push<int>(&v, 10);
+vector.push<int>(&v, 20);
+vector.push<int>(&v, 30);        // 触发扩容
+io.printInt(vector.len<int>(&v));  // 3
+vector.destroy<int>(&v);
+```
+
+> 泛型结构体方法暂不克隆，故以自由泛型函数 `vector.xxx<T>(&v, ...)` 形式提供；
+> `sizeof(T)` 用于按元素大小分配内存.
+
+# 数据库 (std.sqlite)
+
+SQLite 数据库绑定（extern FFI 直通 libc sqlite3，**自动链接 `-lsqlite3`**，无需手动配置）：
+
+- `sqlite.open(path)`: 打开/创建数据库文件，成功返回句柄，失败返回 `null`.
+- `sqlite.close(db)`: 关闭数据库.
+- `sqlite.exec(db, sql)`: 执行无返回的 SQL（CREATE/INSERT/UPDATE/DELETE），0=成功.
+- `sqlite.query(db, sql)`: 查询并逐行打印结果（列以 `|` 分隔）；失败打印错误信息.
+- `sqlite.prepare(db, sql)`: 准备一条 SQL，返回语句句柄（失败返回 `null`）.
+- `sqlite.step(stmt)`: 推进一行；`true`=有数据行，`false`=结束/出错.
+- `sqlite.columnCount(stmt)`: 当前行列数.
+- `sqlite.columnInt(stmt, col)`: 取当前行第 `col` 列为整数.
+- `sqlite.columnText(stmt, col)`: 取当前行第 `col` 列为字符串（指向 sqlite 内部缓冲）.
+- `sqlite.finalize(stmt)`: 释放语句.
+- `sqlite.errmsg(db)`: 最近一次错误的描述信息.
+
+```plang
+import std.io;
+import std.sqlite;
+
+func main() : int {
+    var -> var: ptr db = sqlite.open("test.db");
+    if (db == null) { io.println("open failed"); return 1; }
+
+    sqlite.exec(db, "CREATE TABLE user (id INT, name TEXT, score INT)");
+    sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice', 90)");
+    sqlite.exec(db, "INSERT INTO user VALUES (2, 'Bob', 75)");
+
+    // 按列取值：数据读进变量做计算
+    var -> var: ptr stmt = sqlite.prepare(db, "SELECT id, name, score FROM user");
+    var: int total = 0;
+    var: int n = 0;
+    while (sqlite.step(stmt)) {
+        io.printInt(sqlite.columnInt(stmt, 0));
+        io.print(": ");
+        io.println(sqlite.columnText(stmt, 1));
+        total = total + sqlite.columnInt(stmt, 2);
+        n = n + 1;
+    }
+    io.printInt(total / n);   // 平均分 82
+    io.println("");
+    sqlite.finalize(stmt);
+    sqlite.close(db);
+    return 0;
+}
+```
+
+> `query` 是"打印结果"的便捷版；`prepare/step/columnXxx` 是把数据读进变量的底层 API。
+> `columnText` 返回的指针指向 sqlite 内部缓冲，下次 `step` 前有效；需要长期保存请 `string.dup`.
+
+# 字符串操作 (std.string)
+
+`char*` 字符串（`\0` 结尾）操作库。需要 `import std.string;`（拼接/复制返回堆内存，用完 `mem.free`）：
+
+- `string.len(s)`: 字符串长度（不含末尾 `\0`）.
+- `string.cat(a, b)`: 拼接 `a + b`，返回**新分配**的堆字符串（调用方 free）.
+- `string.dup(s)`: 复制字符串，返回新分配的堆字符串（调用方 free）.
+- `string.eq(a, b)`: 内容相等比较（非指针比较），返回 bool.
+- `string.cmp(a, b)`: 字典序比较，返回 `<0 / 0 / >0`.
+
+```plang
+import std.io;
+import std.mem;
+import std.string;
+
+func main() : int {
+    var: string s = "hello";
+    var: string t = string.cat(s, " world!");
+    io.println(t);                    // hello world!
+    if (string.eq(s, "hello")) {
+        io.println("eq");
+    }
+    var: int c = string.cmp("a", "b");  // 负数
+    mem.free(t);                      // cat 的结果要释放
+    return 0;
+}
+```
+
+> 字符串字面量是全局常量（不可 free）；`cat`/`dup` 返回堆内存需释放。
+> 编译器支持关键字作标识符（`string.len` 里的 `string`）与 char 转义（`'\n'` `'\0'` 等）。

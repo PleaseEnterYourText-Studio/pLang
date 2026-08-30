@@ -1,0 +1,13 @@
+package std.result;
+
+// PLang 标准库：Result<T, E>（错误处理的库级基础，泛型结构体实现）。
+// Ok(v)：成功，携带值；Err(e)：失败，携带错误码。
+// 用法：
+//   var: Result<int, int> r = {true, 42, 0};
+//   if (r.isOk) { io.printInt(r.value); } else { io.printInt(r.error); }
+
+using Result = struct<T: type, E: type> {
+    pub val: bool isOk;     // 是否成功
+    pub val: T value;       // 成功值（isOk=false 时无效）
+    pub val: E error;       // 错误码（isOk=true 时无效）
+};

@@ -33,11 +33,18 @@ struct Symbol
     int column;
     std::string returnType;         // 函数返回类型
     std::vector<std::string> paramTypes;  // 函数参数类型
+    std::vector<std::string> paramNames;  // 函数参数名
+    std::string packageName;        // 所属包（如 "std.thread"）
+    bool isPub;                     // 跨包可见
+    bool isExtern;                  // extern FFI 声明
+    bool isVariadic;                // 变参函数
+    bool isConst = false;           // 编译期常量（enum 变体等）
+    long long constValue = 0;       // 常量值
 
     Symbol(const std::string& name, SymbolKind kind, SymbolMutability mutability,
            const std::string& typeName, int line = 0, int column = 0)
         : name(name), kind(kind), mutability(mutability), typeName(typeName),
-          line(line), column(column) {}
+          line(line), column(column), isPub(false), isExtern(false), isVariadic(false) {}
 };
 
 // 单个作用域
@@ -62,6 +69,7 @@ public:
     void popScope();
 
     bool declare(const std::string& name, std::shared_ptr<Symbol> symbol);
+    bool declareGlobal(const std::string& name, std::shared_ptr<Symbol> symbol);  // 根作用域声明（泛型实例化用）
     std::shared_ptr<Symbol> lookup(const std::string& name) const;
     std::shared_ptr<Symbol> lookupLocal(const std::string& name) const;
 };

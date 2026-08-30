@@ -1,0 +1,118 @@
+package std.sqlite;
+import std.io;
+
+// PLang 标准库：SQLite 数据库（extern FFI 直通 libc sqlite3）。
+// 用法：
+//   var -> var: ptr db = sqlite.open("test.db");
+//   sqlite.exec(db, "CREATE TABLE IF NOT EXISTS user (id INT, name TEXT)");
+//   sqlite.exec(db, "INSERT INTO user VALUES (1, 'Alice')");
+//   sqlite.query(db, "SELECT * FROM user");   // 逐行打印，列以 | 分隔
+//   sqlite.close(db);
+// 链接阶段自动加 -lsqlite3（由编译器检测 import std.sqlite 触发）。
+
+// extern C 声明（LLVM declare，不生成定义）
+extern func sqlite3_open(var -> var: ptr filename, var -> var: ptr dbOut) : int;
+extern func sqlite3_close(var -> var: ptr db) : int;
+extern func sqlite3_exec(var -> var: ptr db, var -> var: ptr sql, var -> var: ptr cb,
+                         var -> var: ptr arg, var -> var: ptr errmsg) : int;
+extern func sqlite3_prepare_v2(var -> var: ptr db, var -> var: ptr sql, val: int n,
+                               var -> var: ptr stmtOut, var -> var: ptr tail) : int;
+extern func sqlite3_step(var -> var: ptr stmt) : int;
+extern func sqlite3_column_count(var -> var: ptr stmt) : int;
+extern func sqlite3_column_int(var -> var: ptr stmt, val: int col) : int;
+extern func sqlite3_column_text(var -> var: ptr stmt, val: int col) -> var: ptr;
+extern func sqlite3_finalize(var -> var: ptr stmt) : int;
+extern func sqlite3_errmsg(var -> var: ptr db) -> var: ptr;
+
+// 打开/创建数据库文件，成功返回句柄，失败返回 null
+pub func open(var -> var: ptr path) -> var: ptr {
+    var -> var: ptr db = null;
+    var: int rc = sqlite3_open(path, &db);
+    if (rc != 0) {
+        return null;
+    }
+    return db;
+}
+
+// 关闭数据库
+pub func close(var -> var: ptr db) {
+    sqlite3_close(db);
+}
+
+// 执行无返回的 SQL（CREATE/INSERT/UPDATE/DELETE 等），0=成功
+pub func exec(var -> var: ptr db, var -> var: ptr sql) : int {
+    var -> var: ptr msgBuf = null;
+    return sqlite3_exec(db, sql, null, null, &msgBuf);
+}
+
+// 查询并逐行打印结果（列以 | 分隔）；失败时打印错误信息
+pub func query(var -> var: ptr db, var -> var: ptr sql) {
+    var -> var: ptr stmt = null;
+    var: int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, null);
+    if (rc != 0) {
+        io.println(sqlite3_errmsg(db));
+        return;
+    }
+    var: int cols = sqlite3_column_count(stmt);
+    while (sqlite3_step(stmt) == 100) {   // SQLITE_ROW
+        var: int c = 0;
+        while (c < cols) {
+            io.print(sqlite3_column_text(stmt, c));
+            if (c + 1 < cols) {
+                io.print("|");
+            }
+            c = c + 1;
+        }
+        io.println("");
+    }
+    sqlite3_finalize(stmt);
+}
+
+// ===== 按列取值 API（把查询结果读进变量） =====
+// 用法：
+//   var -> var: ptr stmt = sqlite.prepare(db, "SELECT id, name FROM user");
+//   while (sqlite.step(stmt)) {
+//       var: int id = sqlite.columnInt(stmt, 0);
+//       var: string name = sqlite.columnText(stmt, 1);
+//   }
+//   sqlite.finalize(stmt);
+
+// 准备一条 SQL，返回语句句柄（失败返回 null）
+pub func prepare(var -> var: ptr db, var -> var: ptr sql) -> var: ptr {
+    var -> var: ptr stmt = null;
+    var: int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, null);
+    if (rc != 0) {
+        return null;
+    }
+    return stmt;
+}
+
+// 推进一行；返回 true=有数据行，false=结束/出错
+pub func step(var -> var: ptr stmt) : bool {
+    return sqlite3_step(stmt) == 100;   // SQLITE_ROW
+}
+
+// 当前行列数
+pub func columnCount(var -> var: ptr stmt) : int {
+    return sqlite3_column_count(stmt);
+}
+
+// 取当前行第 col 列为整数
+pub func columnInt(var -> var: ptr stmt, val: int col) : int {
+    return sqlite3_column_int(stmt, col);
+}
+
+// 取当前行第 col 列为字符串（指向 sqlite 内部缓冲，下次 step 前有效）
+pub func columnText(var -> var: ptr stmt, val: int col) -> var: ptr {
+    return sqlite3_column_text(stmt, col);
+}
+
+// 释放语句
+pub func finalize(var -> var: ptr stmt) {
+    sqlite3_finalize(stmt);
+}
+
+// 最近一次错误的描述信息
+pub func errmsg(var -> var: ptr db) -> var: ptr {
+    return sqlite3_errmsg(db);
+}

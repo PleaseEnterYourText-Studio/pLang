@@ -20,12 +20,16 @@ void Lexer::initKeywords()
         {"var", TokenType::VAR},
         {"val", TokenType::VAL},
         {"moved", TokenType::MOVE},
+        {"volatile", TokenType::VOLATILE},
         {"func", TokenType::FUNC},
         {"impl", TokenType::IMPL},
         {"return", TokenType::RETURN},
         {"using", TokenType::USING},
         {"struct", TokenType::STRUCT},
         {"abstract", TokenType::ABSTRACT},
+        {"enum", TokenType::ENUM},
+        {"union", TokenType::UNION},
+        {"align", TokenType::ALIGN},
         {"pub", TokenType::PUB},
         {"prt", TokenType::PRT},
         {"pri", TokenType::PRI},
@@ -33,11 +37,22 @@ void Lexer::initKeywords()
         {"thisType", TokenType::THIS_TYPE},
         {"type", TokenType::TYPE},
         {"as", TokenType::AS},
+        {"asm", TokenType::ASM},
+        {"extern", TokenType::EXTERN},
+        {"null", TokenType::NULL_LIT},
         {"if", TokenType::IF},
         {"else", TokenType::ELSE},
         {"while", TokenType::WHILE},
         {"for", TokenType::FOR},
-        {"do", TokenType::DO},
+        {"goto", TokenType::GOTO},
+        {"label", TokenType::LABEL},
+        {"switch", TokenType::SWITCH},
+        {"case", TokenType::CASE},
+        {"default", TokenType::DEFAULT},
+        {"break", TokenType::BREAK},
+        {"continue", TokenType::CONTINUE},
+        {"sizeof", TokenType::SIZEOF},
+        {"lambda", TokenType::LAMBDA},
         {"int", TokenType::INT},
         {"char", TokenType::CHAR},
         {"string", TokenType::STRING_TYPE},
@@ -260,7 +275,32 @@ void Lexer::scanString()
         return;
     }
 
-    std::string text = source.substr(start, pos - start);
+    std::string raw = source.substr(start, pos - start);
+    // 转义处理：\n \t \r \\ \" \0 \'
+    std::string text;
+    text.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        if (raw[i] == '\\' && i + 1 < raw.size())
+        {
+            char c = raw[++i];
+            switch (c)
+            {
+                case 'n': text += '\n'; break;
+                case 't': text += '\t'; break;
+                case 'r': text += '\r'; break;
+                case '0': text += '\0'; break;
+                case '\\': text += '\\'; break;
+                case '"': text += '"'; break;
+                case '\'': text += '\''; break;
+                default: text += c; break; // 未知转义：保留原字符
+            }
+        }
+        else
+        {
+            text += raw[i];
+        }
+    }
     advance();
     column++;
 
@@ -305,7 +345,32 @@ void Lexer::scanChar()
     advance();
     column++;
 
-    std::string text = source.substr(start, pos - start - 1);
+    std::string raw = source.substr(start, pos - start - 1);
+    // 转义处理（与字符串一致）：\n \t \r \\ \" \0 \'
+    std::string text;
+    text.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        if (raw[i] == '\\' && i + 1 < raw.size())
+        {
+            char c = raw[++i];
+            switch (c)
+            {
+                case 'n': text += '\n'; break;
+                case 't': text += '\t'; break;
+                case 'r': text += '\r'; break;
+                case '\\': text += '\\'; break;
+                case '"': text += '"'; break;
+                case '\'': text += '\''; break;
+                case '0': text += '\0'; break;
+                default: text += c; break;
+            }
+        }
+        else
+        {
+            text += raw[i];
+        }
+    }
     tokens.emplace_back(TokenType::CHAR_LIT, text, line, col);
 }
 
@@ -406,6 +471,9 @@ void Lexer::scanSymbol()
         case '^':
             if (match('=')) addToken(TokenType::CARET_ASSIGN, "^=");
             else addToken(TokenType::CARET, "^");
+            break;
+        case '?':
+            addToken(TokenType::QUESTION, "?");
             break;
         default:
             tokens.emplace_back(TokenType::ERROR, std::string(1, c), line, col);

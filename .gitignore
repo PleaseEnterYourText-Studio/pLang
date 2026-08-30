@@ -3,3 +3,7 @@
 .vs/
 build/
 .DS_Store
+.vscode/
+*.o
+*.ll
+/cmake-build-make/
