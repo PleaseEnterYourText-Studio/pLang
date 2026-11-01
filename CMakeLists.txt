@@ -77,7 +77,9 @@ message(STATUS "   LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "   Include: ${LLVM_INCLUDE_DIRS}")
 
 include_directories(${LLVM_INCLUDE_DIRS})
-add_definitions(${LLVM_DEFINITIONS})
+# LLVM_DEFINITIONS 是单个空格分隔的字符串，需拆分为列表再添加，否则 Ninja 会整体加引号导致编译失败
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")
+add_definitions(${LLVM_DEFINITIONS_LIST})
 
 add_executable(plc
     src/main.cpp
