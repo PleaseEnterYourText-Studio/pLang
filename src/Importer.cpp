@@ -12,6 +12,7 @@
 #include <unistd.h>
 #elif defined(_WIN32)
 #include <windows.h>
+#undef ERROR
 #endif
 
 namespace fs = std::filesystem;

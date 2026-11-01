@@ -6,14 +6,6 @@
 #include <memory>
 #include <cstdlib>
 #include <algorithm>
-#if defined(__APPLE__)
-#include <mach-o/dyld.h>
-#include <limits.h>
-#elif defined(__linux__)
-#include <unistd.h>
-#elif defined(_WIN32)
-#include <windows.h>
-#endif
 #include <set>
 #include <filesystem>
 #include "llvm/Support/JSON.h"
@@ -24,6 +16,17 @@
 #include "AST.h"
 #include "token.h"
 #include "Importer.h"
+
+// windows.h 会引入 ERROR/THIS/TRUE/FALSE 等宏，必须放在项目头文件之后包含，并解除与 TokenType 冲突的宏
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <limits.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#undef ERROR
+#endif
 
 namespace fs = std::filesystem;
 
@@ -693,7 +696,7 @@ int cmdBuild(const std::string& dir, bool runAfter, const std::vector<std::strin
     }
     else
     {
-        std::string exeName = fs::path(dir) / manifestOutput(m);
+        std::string exeName = (fs::path(dir) / manifestOutput(m)).string();
         std::cout << "linking -> " << exeName << "\n";
         result = linkExecutable(objFiles, exeName, needSqlite, m.linkLibraries) ? 0 : 1;
         if (result == 0 && runAfter)
@@ -719,7 +722,7 @@ int cmdClean(const std::string& dir)
         std::cerr << "error: no pLangLists.json in '" << dir << "'\n";
         return 1;
     }
-    std::string out = fs::path(dir) / manifestOutput(m);
+    std::string out = (fs::path(dir) / manifestOutput(m)).string();
     int removed = 0;
     for (const auto& candidate : { out, out + ".a", out + ".dSYM" })
     {
