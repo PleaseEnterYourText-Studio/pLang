@@ -17,6 +17,30 @@
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
+
+#if defined(_WIN32)
+// Windows CRT（UCRT/MSVC）没有 stdin/stdout/stderr 数据符号，它们只是 __acrt_iob_func() 宏。
+// 为 extern var stdin/stdout/stderr 在本模块内定义同名全局，并挂一个全局构造函数用 __acrt_iob_func 初始化。
+static void emitAcrtGlobalInit(llvm::Module* m, llvm::GlobalVariable* gv, int idx)
+{
+    llvm::LLVMContext& ctx = m->getContext();
+    llvm::Function* acrt = m->getFunction("__acrt_iob_func");
+    if (!acrt)
+    {
+        auto* fnTy = llvm::FunctionType::get(llvm::PointerType::get(ctx, 0), {llvm::Type::getInt32Ty(ctx)}, false);
+        acrt = llvm::Function::Create(fnTy, llvm::Function::ExternalLinkage, "__acrt_iob_func", m);
+    }
+    auto* ctorTy = llvm::FunctionType::get(llvm::Type::getVoidTy(ctx), false);
+    auto* ctor = llvm::Function::Create(ctorTy, llvm::Function::InternalLinkage,
+                                        "plang.stdio.init." + std::to_string(idx), m);
+    auto* bb = llvm::BasicBlock::Create(ctx, "entry", ctor);
+    llvm::IRBuilder<> b(bb);
+    b.CreateStore(b.CreateCall(acrt, {b.getInt32(idx)}), gv);
+    b.CreateRetVoid();
+    llvm::appendToGlobalCtors(*m, ctor, 65535);
+}
+#endif
 
 // 运算符 → 重载方法名（空串表示不支持）
 static const char* binaryOpMethodName(BinaryOpType op);
@@ -887,7 +911,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             for (auto& stmt : block->statements)
             {
                 // 前一条语句已终结（return/goto）且当前不是 label：进入不可达块
-                if (builder.GetInsertBlock()->getTerminator() &&
+                if (builder.GetInsertBlock()->getTerminatorOrNull() &&
                     stmt->type != ASTNodeType::LABEL_STMT)
                 {
                     llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(
@@ -911,7 +935,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             // RAII：作用域退出，逆序调用 .destroy(&var)
             for (auto it = destroyables.rbegin(); it != destroyables.rend(); ++it)
             {
-                if (!builder.GetInsertBlock()->getTerminator())
+                if (!builder.GetInsertBlock()->getTerminatorOrNull())
                 {
                     llvm::Function* dtor = module->getFunction(it->second + "..destroy");
                     auto nv = namedValues.find(it->first);
@@ -1026,7 +1050,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
 
             builder.SetInsertPoint(thenBB);
             generateStatement(ifStmt->thenBranch.get());
-            if (!builder.GetInsertBlock()->getTerminator()) {
+            if (!builder.GetInsertBlock()->getTerminatorOrNull()) {
                 builder.CreateBr(mergeBB);
             }
 
@@ -1034,7 +1058,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             if (ifStmt->elseBranch) {
                 generateStatement(ifStmt->elseBranch.get());
             }
-            if (!builder.GetInsertBlock()->getTerminator()) {
+            if (!builder.GetInsertBlock()->getTerminatorOrNull()) {
                 builder.CreateBr(mergeBB);
             }
 
@@ -1060,7 +1084,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             loopContext.push_back({condBB, mergeBB});
             generateStatement(whileStmt->body.get());
             loopContext.pop_back();
-            if (!builder.GetInsertBlock()->getTerminator()) {
+            if (!builder.GetInsertBlock()->getTerminatorOrNull()) {
                 builder.CreateBr(condBB);
             }
 
@@ -1093,7 +1117,7 @@ void CodeGenerator::generateStatement(ASTNode* node)
             loopContext.push_back({updateBB, mergeBB});
             generateStatement(forStmt->body.get());
             loopContext.pop_back();
-            if (!builder.GetInsertBlock()->getTerminator()) {
+            if (!builder.GetInsertBlock()->getTerminatorOrNull()) {
                 builder.CreateBr(updateBB);
             }
 
@@ -1166,7 +1190,7 @@ void CodeGenerator::generateLabel(LabelStmtNode* node)
     auto it = labelBlocks.find(node->name);
     if (it == labelBlocks.end()) return;
     // 落入 label：当前块（未终结时）跳到 label 块，再从 label 块继续
-    if (!builder.GetInsertBlock()->getTerminator())
+    if (!builder.GetInsertBlock()->getTerminatorOrNull())
     {
         builder.CreateBr(it->second);
     }
@@ -1193,7 +1217,7 @@ void CodeGenerator::generateSwitch(SwitchStmtNode* node)
                 si->setDefaultDest(defBB);
                 builder.SetInsertPoint(defBB);
                 generateStatement(c.body.get());
-                if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(mergeBB);
+                if (!builder.GetInsertBlock()->getTerminatorOrNull()) builder.CreateBr(mergeBB);
             }
         }
         else
@@ -1204,7 +1228,7 @@ void CodeGenerator::generateSwitch(SwitchStmtNode* node)
             si->addCase(caseVal, caseBB);
             builder.SetInsertPoint(caseBB);
             if (c.body) generateStatement(c.body.get());
-            if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(mergeBB);
+            if (!builder.GetInsertBlock()->getTerminatorOrNull()) builder.CreateBr(mergeBB);
         }
     }
     builder.SetInsertPoint(mergeBB);
@@ -1307,7 +1331,7 @@ void CodeGenerator::generateFunction(FunctionDeclNode* fn, bool isMethod, const 
 
     generateStatement(fn->body.get());
 
-    if (!builder.GetInsertBlock()->getTerminator()) {
+    if (!builder.GetInsertBlock()->getTerminatorOrNull()) {
         if (retType->isVoidTy()) {
             builder.CreateRetVoid();
         } else {
@@ -1663,6 +1687,20 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
             auto* ev = dynamic_cast<ExternVarDeclNode*>(decl.get());
             if (!externGlobals.count(ev->name) && !module->getNamedGlobal(ev->name))
             {
+                llvm::Type* ty = getLLVMType(ev->type.get());
+#if defined(_WIN32)
+                // Windows CRT 无 stdin/stdout/stderr 数据符号：模块内定义同名全局并延迟初始化
+                int acrtIdx = ev->name == "stdin" ? 0 : ev->name == "stdout" ? 1 : ev->name == "stderr" ? 2 : -1;
+                if (acrtIdx >= 0)
+                {
+                    auto* gv = new llvm::GlobalVariable(
+                        *module, ty, false, llvm::GlobalValue::InternalLinkage,
+                        llvm::Constant::getNullValue(ty), ev->name);
+                    externGlobals[ev->name] = gv;
+                    emitAcrtGlobalInit(module.get(), gv, acrtIdx);
+                    continue;
+                }
+#endif
                 // 平台符号映射：macOS 的标准流符号是 __stdinp/__stdoutp/__stderrp
                 std::string symbolName = ev->name;
 #if defined(__APPLE__)
@@ -1670,7 +1708,6 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
                 else if (symbolName == "stdout") symbolName = "__stdoutp";
                 else if (symbolName == "stderr") symbolName = "__stderrp";
 #endif
-                llvm::Type* ty = getLLVMType(ev->type.get());
                 externGlobals[ev->name] = new llvm::GlobalVariable(
                     *module, ty, false, llvm::GlobalValue::ExternalLinkage, nullptr, symbolName);
             }
@@ -1748,7 +1785,7 @@ void CodeGenerator::generate(ProgramNode* root, bool emitMain)
         }
     }
 
-    if (!builder.GetInsertBlock()->getTerminator()) {
+    if (!builder.GetInsertBlock()->getTerminatorOrNull()) {
         builder.CreateRet(llvm::ConstantInt::get(context, llvm::APInt(32, 0)));
     }
     }
